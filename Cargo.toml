@@ -20,3 +20,5 @@ image = "0.24"
 lopdf = "0.32"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 pdfium-render = "0.9.4"
+ureq = { version = "2.10", default-features = false, features = ["tls", "json"] }
+serde = { version = "1.0", features = ["derive"] }

@@ -1,4 +1,5 @@
 pub mod filter_modal;
+pub mod footer;
 pub mod pdf_renderer;
 pub mod preview_panel;
 pub mod results_list;

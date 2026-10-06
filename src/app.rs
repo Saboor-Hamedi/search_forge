@@ -4,7 +4,8 @@ use std::sync::{Arc, RwLock};
 
 use crate::indexer::filters::default_ignored_patterns;
 use crate::indexer::scanner::{search_records, start_background_scan, FileRecord};
-use crate::ui::{filter_modal, preview_panel, results_list, search_bar};
+use crate::ui::{filter_modal, footer, preview_panel, results_list, search_bar};
+use crate::utils::updater::UpdateManager;
 
 pub struct SearchForgeApp {
     search_query: String,
@@ -16,6 +17,7 @@ pub struct SearchForgeApp {
     ignored_patterns: Vec<String>,
     left_panel_width: f32,
     pdf_renderer: crate::ui::pdf_renderer::PdfRenderer,
+    updater: UpdateManager,
 }
 
 impl SearchForgeApp {
@@ -54,12 +56,16 @@ impl SearchForgeApp {
             ignored_patterns,
             left_panel_width: 440.0, // Centered by default (half of 880.0)
             pdf_renderer: crate::ui::pdf_renderer::PdfRenderer::new(),
+            updater: UpdateManager::new(),
         }
     }
 }
 
 impl App for SearchForgeApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // Poll background updater events on each frame
+        self.updater.poll_updates();
+
         // High-priority Escape key handling: works even when the search bar is focused!
         let esc_pressed = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         if esc_pressed {
@@ -114,7 +120,6 @@ impl App for SearchForgeApp {
             self.last_search_query = self.search_query.clone();
         }
 
-
         filter_modal::render_filter_modal(ctx, &mut self.open_settings, &mut self.ignored_patterns);
 
         // Top Search Bar (Flush edge-to-edge: matching body with zero gap and no border)
@@ -122,6 +127,19 @@ impl App for SearchForgeApp {
             .frame(egui::Frame::none().fill(Color32::from_rgb(18, 19, 23)).inner_margin(egui::Margin::ZERO))
             .show(ctx, |ui| {
                 search_bar::render_search_bar(ui, &mut self.search_query, &mut self.open_settings, self.results.len());
+            });
+
+        // Sleek Bottom Footer (Status info, file count, and update/download/restart action)
+        let total_indexed = self.store.read().map(|s| s.len()).unwrap_or(0);
+        egui::TopBottomPanel::bottom("bottom_footer")
+            .frame(
+                egui::Frame::none()
+                    .fill(Color32::from_rgb(15, 16, 20))
+                    .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+                    .stroke(Stroke::new(1.0, Color32::from_rgb(30, 32, 40))),
+            )
+            .show(ctx, |ui| {
+                footer::render_footer(ui, &mut self.updater, total_indexed);
             });
 
         // Main Content Area with Centered Draggable Splitter Knob

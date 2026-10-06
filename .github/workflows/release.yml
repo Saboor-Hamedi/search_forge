@@ -1,0 +1,102 @@
+name: Release SearchForge
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build Release (${{ matrix.os }} - ${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_name: search_forge.exe
+            asset_name: searchforge-windows-x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary_name: search_forge
+            asset_name: searchforge-linux-x86_64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary_name: search_forge
+            asset_name: searchforge-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary_name: search_forge
+            asset_name: searchforge-macos-aarch64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev pkg-config
+
+      - name: Build binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Prepare Windows artifacts
+      - name: Package Windows Binary & Setup Installer
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}".TrimStart("v")
+          
+          # Standalone binary
+          Copy-Item "target/${{ matrix.target }}/release/search_forge.exe" "SearchForge-windows-x64.exe"
+          
+          # Zip archive
+          Compress-Archive -Path "target/${{ matrix.target }}/release/search_forge.exe" -DestinationPath "SearchForge-windows-x64.zip"
+          
+          # Compile Inno Setup Installer
+          choco install innosetup -y
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion="$ver" installer.iss
+          Move-Item "SearchForge-Setup.exe" "SearchForge-UserSetup-windows-x64.exe"
+
+      # Prepare Linux artifacts
+      - name: Package Linux Binary & Tarball
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cp target/${{ matrix.target }}/release/search_forge SearchForge-linux-x64
+          chmod +x SearchForge-linux-x64
+          tar -czvf SearchForge-linux-x64.tar.gz -C target/${{ matrix.target }}/release search_forge
+          zip SearchForge-linux-x64.zip target/${{ matrix.target }}/release/search_forge
+
+      # Prepare macOS artifacts
+      - name: Package macOS Binary & Zip
+        if: matrix.os == 'macos-latest'
+        run: |
+          SUFFIX="${{ matrix.target == 'aarch64-apple-darwin' && 'arm64' || 'x64' }}"
+          cp target/${{ matrix.target }}/release/search_forge "SearchForge-macos-${SUFFIX}"
+          chmod +x "SearchForge-macos-${SUFFIX}"
+          zip -j "SearchForge-macos-${SUFFIX}.zip" "SearchForge-macos-${SUFFIX}"
+
+      # Upload binaries to GitHub Release
+      - name: Publish Release Assets
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            SearchForge-*.exe
+            SearchForge-*.zip
+            SearchForge-*.tar.gz
+            SearchForge-macos-*
+            SearchForge-linux-*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
