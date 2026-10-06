@@ -1,5 +1,4 @@
 use crate::indexer::filters::should_ignore;
-use std::path::PathBuf;
 use walkdir::WalkDir;
 
 #[derive(Clone, Debug)]
@@ -14,8 +13,41 @@ use crate::utils::unicode::normalize_for_search;
 use std::sync::{Arc, RwLock};
 
 /// Walk roots in a background thread and populate `store` asynchronously.
-pub fn start_background_scan(roots: Vec<PathBuf>, ignored: Vec<String>, store: Arc<RwLock<Vec<FileRecord>>>) {
+pub fn start_background_scan(ignored: Vec<String>, store: Arc<RwLock<Vec<FileRecord>>>) {
     std::thread::spawn(move || {
+        let mut roots = Vec::new();
+
+        // 1. Index Start Menu shortcuts first so software is instantly searchable
+        if let Some(home) = dirs::home_dir() {
+            let user_start_menu = home.join("AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs");
+            if user_start_menu.exists() {
+                roots.push(user_start_menu);
+            }
+        }
+        let common_start_menu = std::path::PathBuf::from("C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs");
+        if common_start_menu.exists() {
+            roots.push(common_start_menu);
+        }
+
+        // 2. Dynamically detect all active drives on the system (A:\ to Z:\)
+        #[cfg(target_os = "windows")]
+        {
+            for drive_letter in b'A'..=b'Z' {
+                let drive_str = format!("{}:\\", drive_letter as char);
+                let drive_path = std::path::PathBuf::from(&drive_str);
+                if drive_path.exists() && std::fs::read_dir(&drive_path).is_ok() {
+                    roots.push(drive_path);
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            if let Some(home) = dirs::home_dir() {
+                roots.push(home);
+            }
+        }
+
         for root in roots {
             if !root.exists() {
                 continue;
@@ -57,11 +89,12 @@ pub fn start_background_scan(roots: Vec<PathBuf>, ignored: Vec<String>, store: A
 
                 batch.push(record);
 
-                if batch.len() >= 200 {
+                if batch.len() >= 2000 {
                     if let Ok(mut lock) = store.write() {
                         lock.append(&mut batch);
                     }
                     batch.clear();
+                    std::thread::sleep(std::time::Duration::from_millis(2));
                 }
             }
 
@@ -69,6 +102,7 @@ pub fn start_background_scan(roots: Vec<PathBuf>, ignored: Vec<String>, store: A
                 if let Ok(mut lock) = store.write() {
                     lock.append(&mut batch);
                 }
+                batch.clear();
             }
         }
     });

@@ -26,51 +26,23 @@ impl SearchForgeApp {
         // Apply sleek Neobrutalist / VS Code palette style visuals
         let mut visuals = egui::Visuals::dark();
         visuals.panel_fill = Color32::from_rgb(18, 19, 23);
-        visuals.window_fill = Color32::from_rgb(22, 23, 28);
+        visuals.window_fill = Color32::from_rgb(18, 19, 23);
         visuals.extreme_bg_color = Color32::from_rgb(14, 15, 18);
         visuals.selection.bg_fill = Color32::from_rgb(255, 230, 0);
         visuals.selection.stroke = Stroke::NONE;
         visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(18, 19, 23);
         visuals.widgets.noninteractive.bg_stroke = Stroke::NONE;
-        visuals.widgets.inactive.bg_fill = Color32::from_rgb(26, 27, 32);
-        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(42, 44, 52));
-        visuals.widgets.hovered.bg_fill = Color32::from_rgb(34, 36, 44);
-        visuals.widgets.hovered.bg_stroke = Stroke::new(1.5, Color32::from_rgb(255, 230, 0));
+        visuals.widgets.inactive.bg_fill = Color32::from_rgb(24, 25, 30);
+        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(38, 40, 48));
+        visuals.widgets.hovered.bg_fill = Color32::from_rgb(30, 32, 40);
+        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(50, 54, 68));
         visuals.widgets.active.bg_fill = Color32::from_rgb(255, 230, 0);
-        visuals.window_rounding = Rounding::same(6.0);
+        visuals.window_rounding = Rounding::same(5.0);
         cc.egui_ctx.set_visuals(visuals);
 
         let store = Arc::new(RwLock::new(Vec::new()));
         let ignored_patterns = default_ignored_patterns();
-
-        // Target user content folders: Downloads, Documents, Desktop, Pictures, Videos, Music, OneDrive
-        let mut roots = Vec::new();
-        if let Some(dl) = dirs::download_dir() {
-            roots.push(dl);
-        }
-        if let Some(docs) = dirs::document_dir() {
-            roots.push(docs);
-        }
-        if let Some(dt) = dirs::desktop_dir() {
-            roots.push(dt);
-        }
-        if let Some(pic) = dirs::picture_dir() {
-            roots.push(pic);
-        }
-        if let Some(vid) = dirs::video_dir() {
-            roots.push(vid);
-        }
-        if let Some(mus) = dirs::audio_dir() {
-            roots.push(mus);
-        }
-        if let Some(home) = dirs::home_dir() {
-            let one_drive = home.join("OneDrive");
-            if one_drive.exists() {
-                roots.push(one_drive);
-            }
-        }
-
-        start_background_scan(roots, ignored_patterns.clone(), store.clone());
+        start_background_scan(ignored_patterns.clone(), store.clone());
 
         Self {
             search_query: String::new(),
@@ -145,9 +117,9 @@ impl App for SearchForgeApp {
 
         filter_modal::render_filter_modal(ctx, &mut self.open_settings, &mut self.ignored_patterns);
 
-        // Top Search Bar (Flush edge-to-edge: NO gap from left, right, top)
+        // Top Search Bar (Flush edge-to-edge: matching body with zero gap and no border)
         egui::TopBottomPanel::top("top_panel")
-            .frame(egui::Frame::none().fill(Color32::from_rgb(22, 23, 29)).inner_margin(egui::Margin::ZERO))
+            .frame(egui::Frame::none().fill(Color32::from_rgb(18, 19, 23)).inner_margin(egui::Margin::ZERO))
             .show(ctx, |ui| {
                 search_bar::render_search_bar(ui, &mut self.search_query, &mut self.open_settings, self.results.len());
             });

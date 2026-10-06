@@ -16,6 +16,10 @@ pub fn default_ignored_patterns() -> Vec<String> {
         ".gradle".to_string(),
         "Temp".to_string(),
         "System Volume Information".to_string(),
+        "Windows".to_string(),
+        "Program Files".to_string(),
+        "Program Files (x86)".to_string(),
+        "ProgramData".to_string(),
     ]
 }
 
@@ -30,12 +34,26 @@ pub const IGNORED_EXTENSIONS: &[&str] = &[
 pub fn should_ignore(path_str: &str, ignored: &[String]) -> bool {
     let normalized = path_str.replace('\\', "/");
     
+    let is_start_menu = normalized.to_ascii_lowercase().contains("start menu");
+
     // Check ignored folder patterns
     for pattern in ignored {
         let trimmed = pattern.trim_matches('/');
         if trimmed.is_empty() {
             continue;
         }
+
+        // Allow Windows Start Menu applications
+        if is_start_menu && (
+            trimmed.eq_ignore_ascii_case("AppData")
+            || trimmed.eq_ignore_ascii_case("ProgramData")
+            || trimmed.eq_ignore_ascii_case("Windows")
+            || trimmed.eq_ignore_ascii_case("Program Files")
+            || trimmed.eq_ignore_ascii_case("Program Files (x86)")
+        ) {
+            continue;
+        }
+
         for segment in normalized.split('/') {
             if segment.eq_ignore_ascii_case(trimmed) {
                 return true;
@@ -52,10 +70,10 @@ pub fn should_ignore(path_str: &str, ignored: &[String]) -> bool {
             return true;
         }
 
-        // Check if extension is binary/cache garbage
+        // Check if extension is binary/cache garbage (allow .lnk application shortcuts)
         if let Some(ext) = Path::new(path_str).extension().and_then(|e| e.to_str()) {
             let ext_lower = ext.to_lowercase();
-            if IGNORED_EXTENSIONS.contains(&ext_lower.as_str()) {
+            if ext_lower != "lnk" && IGNORED_EXTENSIONS.contains(&ext_lower.as_str()) {
                 return true;
             }
         }
@@ -85,5 +103,7 @@ mod tests {
         assert!(!should_ignore("C:\\Users\\User\\Documents\\budget.xlsx", &ignored));
         assert!(!should_ignore("C:\\Users\\User\\Desktop\\notes.md", &ignored));
         assert!(!should_ignore("C:\\Users\\User\\Projects\\main.rs", &ignored));
+        assert!(!should_ignore("C:\\Users\\User\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Visual Studio Code.lnk", &ignored));
+        assert!(!should_ignore("C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\DBeaver.lnk", &ignored));
     }
 }

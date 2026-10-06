@@ -1,15 +1,15 @@
-use egui::{Color32, Frame, Margin, Rounding, Stroke, Ui, Vec2};
+use egui::{Color32, Frame, Margin, Pos2, Rounding, Stroke, Ui, Vec2};
 
 pub fn render_search_bar(
     ui: &mut Ui,
     query: &mut String,
     open_settings: &mut bool,
-    result_count: usize,
+    _result_count: usize,
 ) {
-    // Edge-to-edge Neobrutalist container: zero gap from left, right, top
+    // Edge-to-edge container: matching body background (no border)
     Frame::none()
-        .fill(Color32::from_rgb(22, 23, 29))
-        .stroke(Stroke::new(1.5, Color32::from_rgb(45, 48, 60)))
+        .fill(Color32::from_rgb(18, 19, 23))
+        .stroke(Stroke::NONE)
         .inner_margin(Margin::symmetric(14.0, 11.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -17,55 +17,89 @@ pub fn render_search_bar(
                 ui.label(
                     egui::RichText::new("🔍")
                         .size(16.0)
-                        .color(Color32::from_rgb(255, 230, 0)), // Neobrutalist vivid yellow
+                        .color(Color32::from_rgb(180, 185, 200)),
                 );
                 ui.add_space(8.0);
 
-                // Large, clean, borderless search input
+                // Large, clean, borderless search input matching body
+                let input_id = egui::Id::new("main_search_text_edit");
                 let text_edit = egui::TextEdit::singleline(query)
+                    .id(input_id)
                     .hint_text("Type to search files, code, docs...")
                     .font(egui::FontId::proportional(16.0))
                     .text_color(Color32::WHITE)
                     .frame(false)
-                    .desired_width((ui.available_width() - 170.0).max(100.0));
+                    .desired_width((ui.available_width() - 120.0).max(100.0));
 
-                ui.add(text_edit);
+                let response = ui.add(text_edit);
+                let has_focused_id = ui.make_persistent_id("search_input_initial_focused");
+                let has_focused = ui.data(|d| d.get_temp::<bool>(has_focused_id).unwrap_or(false));
+                if !has_focused {
+                    response.request_focus();
+                    ui.data_mut(|d| d.insert_temp(has_focused_id, true));
+                }
 
                 if !query.is_empty() {
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new("✕")
-                                    .size(12.0)
-                                    .color(Color32::from_rgb(180, 185, 200)),
-                            )
-                            .frame(false),
-                        )
-                        .on_hover_text("Clear search")
-                        .clicked()
-                    {
+                    let (clear_rect, clear_resp) = ui.allocate_exact_size(Vec2::new(20.0, 20.0), egui::Sense::click());
+                    let cross_col = if clear_resp.hovered() {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_rgb(150, 155, 170)
+                    };
+                    let pad = 5.0;
+                    ui.painter().line_segment(
+                        [
+                            Pos2::new(clear_rect.min.x + pad, clear_rect.min.y + pad),
+                            Pos2::new(clear_rect.max.x - pad, clear_rect.max.y - pad),
+                        ],
+                        Stroke::new(1.5, cross_col),
+                    );
+                    ui.painter().line_segment(
+                        [
+                            Pos2::new(clear_rect.min.x + pad, clear_rect.max.y - pad),
+                            Pos2::new(clear_rect.max.x - pad, clear_rect.min.y + pad),
+                        ],
+                        Stroke::new(1.5, cross_col),
+                    );
+                    if clear_resp.on_hover_text("Clear search").clicked() {
                         query.clear();
                     }
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Sleek, modern window close button
-                    let close_btn = egui::Button::new(
-                        egui::RichText::new("✕")
-                            .size(13.0)
-                            .strong()
-                            .color(Color32::from_rgb(200, 205, 215)),
-                    )
-                    .fill(Color32::from_rgb(34, 36, 44))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(50, 54, 66)))
-                    .rounding(Rounding::same(5.0))
-                    .min_size(Vec2::new(26.0, 26.0));
+                    // Crisp native custom vector close button (never broken Unicode)
+                    let (close_rect, close_resp) = ui.allocate_exact_size(Vec2::new(26.0, 26.0), egui::Sense::click());
+                    let close_bg = if close_resp.is_pointer_button_down_on() {
+                        Color32::from_rgb(180, 45, 45)
+                    } else if close_resp.hovered() {
+                        Color32::from_rgb(200, 55, 55)
+                    } else {
+                        Color32::from_rgb(28, 30, 38)
+                    };
+                    let stroke_col = if close_resp.hovered() {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_rgb(190, 195, 210)
+                    };
 
-                    if ui
-                        .add(close_btn)
-                        .on_hover_text("Close SearchForge")
-                        .clicked()
-                    {
+                    ui.painter().rect_filled(close_rect, Rounding::same(5.0), close_bg);
+                    let pad = 8.0;
+                    ui.painter().line_segment(
+                        [
+                            Pos2::new(close_rect.min.x + pad, close_rect.min.y + pad),
+                            Pos2::new(close_rect.max.x - pad, close_rect.max.y - pad),
+                        ],
+                        Stroke::new(1.5, stroke_col),
+                    );
+                    ui.painter().line_segment(
+                        [
+                            Pos2::new(close_rect.min.x + pad, close_rect.max.y - pad),
+                            Pos2::new(close_rect.max.x - pad, close_rect.min.y + pad),
+                        ],
+                        Stroke::new(1.5, stroke_col),
+                    );
+
+                    if close_resp.on_hover_text("Close SearchForge").clicked() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                         std::process::exit(0);
                     }
@@ -98,14 +132,6 @@ pub fn render_search_bar(
 
                     if ui.add(filter_btn).clicked() {
                         *open_settings = !*open_settings;
-                    }
-
-                    if !query.trim().is_empty() {
-                        ui.label(
-                            egui::RichText::new(format!("{} found", result_count))
-                                .size(11.0)
-                                .color(Color32::from_rgb(140, 145, 165)),
-                        );
                     }
                 });
             });

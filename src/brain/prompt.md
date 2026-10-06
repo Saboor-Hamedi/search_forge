@@ -1,629 +1,217 @@
-Exactly. You don't want your agent to **parse the PDF into text and fake a document preview**. You want an actual **PDF renderer**, essentially the same fundamental experience as Chrome's built-in PDF viewer—but integrated into SearchForge's preview pane and stripped down to the essentials.
+# SearchForge — Fix the Exclusion Filters Dialog Icons and UI
 
-Here is the focused prompt I'd give your agent:
+The **Exclusion Filters** dialog is still visually broken and was not properly fixed.
 
----
+Focus **only on this dialog**. Do not modify the rest of the application.
 
-# SearchForge — Native-Quality PDF Preview Refactor
+## Problem
 
-## Objective
-
-The current PDF preview is wrong.
-
-When a PDF is selected, SearchForge currently attempts to read the PDF as text and produces ugly output such as:
-
-```text
-??
-??
-??
-??
-??
-```
-
-**Stop doing this completely.**
-
-A PDF is not a text file.
-
-I do **not** want the PDF preview to extract the raw PDF contents and display them as text.
-
-I want SearchForge to display the PDF using a **real PDF rendering engine**, similar to how a PDF opens natively inside **Google Chrome's built-in PDF viewer**.
-
-However, SearchForge should have a much more minimal and elegant presentation.
-
----
-
-# 1. Real PDF Rendering — Not Text Parsing
-
-The PDF preview pipeline must become:
-
-```text
-PDF file
-   ↓
-PDF rendering engine
-   ↓
-rasterized PDF page
-   ↓
-egui texture
-   ↓
-SearchForge preview
-```
-
-NOT:
-
-```text
-PDF
- ↓
-read_to_string()
- ↓
-UTF-8 parsing
- ↓
-??
-??
-??
-```
-
-Remove the current PDF-as-text behavior entirely.
-
-There must never again be:
-
-```text
-??
-??
-??
-```
-
-or raw PDF syntax shown to the user.
-
----
-
-# 2. Think "Chrome PDF Viewer"
-
-Use the **same conceptual model as Chrome's PDF viewer**.
-
-When Chrome opens:
-
-```text
-example.pdf
-```
-
-it doesn't display the PDF's underlying binary/text structure.
-
-It renders the actual document pages.
-
-SearchForge should do the same.
-
-The user should see:
-
-```text
-┌───────────────────────────────┐
-│                               │
-│          PDF PAGE             │
-│                               │
-│      actual document          │
-│                               │
-│                               │
-└───────────────────────────────┘
-```
-
-The document itself should look exactly like a real PDF page.
-
-Fonts, images, layout, tables, spacing, etc. should be rendered by the PDF renderer.
-
----
-
-# 3. BUT: Do NOT Copy Chrome's UI
-
-This is extremely important.
-
-I do **not** want:
-
-- Chrome's PDF toolbar
-- sidebar
-- thumbnails panel
-- print button
-- download button
-- browser controls
-- unnecessary PDF-reader chrome
-- large header
-- giant toolbar
-- unnecessary controls
-
-SearchForge is not trying to become a PDF reader.
-
-It is a **file search application with a beautiful document preview**.
-
-Therefore:
-
-> Borrow Chrome's PDF rendering quality, NOT Chrome's PDF-reader interface.
-
----
-
-# 4. Desired SearchForge PDF Experience
-
-The preview should feel almost invisible.
-
-Something like:
-
-```text
-┌─────────────────────────────────────────────┐
-│                                             │
-│       The 99 Names of Allah.pdf             │
-│       PDF · 273 pages · 1.4 MB              │
-│                                             │
-│             ┌─────────────────┐             │
-│             │                 │             │
-│             │                 │             │
-│             │    PDF PAGE     │             │
-│             │                 │             │
-│             │                 │             │
-│             └─────────────────┘             │
-│                                             │
-│             ┌─────────────────┐             │
-│             │                 │             │
-│             │    PDF PAGE     │             │
-│             │                 │             │
-│             └─────────────────┘             │
-│                                             │
-└─────────────────────────────────────────────┘
-```
-
-The actual page rendering should be high quality.
-
-The surrounding application should remain minimal.
-
----
-
-# 5. PDF Pages Must Look Like Actual Documents
-
-Do not create a fake card containing extracted PDF text.
-
-Render the actual PDF page.
-
-For example, if the PDF contains:
-
-- Arabic
-- Persian
-- English
-- images
-- tables
-- typography
-- colored elements
-- page backgrounds
-- illustrations
-
-all of that should appear as part of the rendered page.
-
-The PDF renderer is responsible for reproducing the document visually.
-
----
-
-# 6. Lightweight Rendering
-
-The PDF viewer must remain lightweight.
-
-Do not build a gigantic PDF subsystem.
-
-Do not render the entire PDF into memory.
-
-If a PDF contains:
-
-```text
-273 pages
-```
-
-do NOT render all 273 pages at startup.
-
-Use lazy rendering:
-
-```text
-                 viewport
-                    │
-        ┌───────────┴───────────┐
-        │                       │
-    visible pages          nearby pages
-        │                       │
-        └───────────┬───────────┘
-                    ↓
-             PDF renderer
-                    ↓
-             egui textures
-```
-
-Only render pages that are visible or very close to becoming visible.
-
----
-
-# 7. Scrolling
-
-The user should be able to scroll through the PDF naturally.
-
-The experience should feel like:
-
-> opening a PDF in Chrome and simply scrolling through it.
-
-Not:
-
-> clicking "Page 1", "Page 2", "Page 3".
-
-No page navigation UI is necessary unless it is genuinely required.
-
-Natural vertical scrolling is preferred.
-
----
-
-# 8. No PDF Sidebar
-
-Absolutely no PDF thumbnail sidebar.
-
-Do NOT create:
-
-```text
-┌──────┬───────────────────────────┐
-│ 1    │                           │
-│ 2    │       PDF                 │
-│ 3    │                           │
-│ 4    │                           │
-│ 5    │                           │
-└──────┴───────────────────────────┘
-```
-
-The SearchForge preview should be:
-
-```text
-┌──────────────────────────────────┐
-│                                  │
-│           PDF PAGE               │
-│                                  │
-│           PDF PAGE               │
-│                                  │
-│           PDF PAGE               │
-│                                  │
-└──────────────────────────────────┘
-```
-
-Clean.
-
----
-
-# 9. Minimal Metadata
-
-The PDF preview may have a very small metadata area.
+The exclusion filter rows currently contain broken/misplaced icons or checkbox-looking elements.
 
 For example:
 
 ```text
-The 99 Names of Allah
-PDF · 273 pages · 1.4 MB
+node_modules   [broken icon]
+.git           [broken icon]
+target         [broken icon]
+AppData        [broken icon]
+.cache         [broken icon]
+$RECYCLE.BIN   [broken icon]
 ```
 
-That's enough.
+These controls do not look like proper checkboxes and appear visually broken.
 
-Don't build a giant PDF header.
+## Required Fix
 
-Don't build a toolbar.
+Redesign the filter rows so every exclusion pattern has a **proper, consistent checkbox/control**.
 
-Don't duplicate metadata everywhere.
+Desired structure:
+
+```text
+☐ node_modules
+☐ .git
+☐ target
+☐ AppData
+☐ .cache
+☐ $RECYCLE.BIN
+```
+
+When selected:
+
+```text
+☑ node_modules
+```
+
+The checkbox must:
+
+- render correctly
+- have a consistent size
+- align vertically with the text
+- have adequate spacing from the pattern
+- have a clear checked/unchecked state
+- respond correctly to mouse clicks
+- have a subtle hover state
+- use the existing SearchForge visual language
+- NOT look like a broken icon
+
+## Important
+
+Do **not** use arbitrary Unicode characters such as:
+
+```text
+□
+☐
+☑
+✓
+```
+
+if the current font/rendering causes them to appear incorrectly.
+
+Use a proper egui checkbox widget or a correctly rendered custom checkbox using egui primitives.
+
+Do not rely on an icon font that may not exist.
 
 ---
 
-# 10. Open Externally
+## Row Layout
 
-There can be one subtle action:
+Each row should have a clean structure:
 
 ```text
-Open ↗
+┌─────────────────────────────┐
+│ ☐  node_modules              │
+│ ☐  .git                      │
+│ ☐  target                    │
+│ ☐  AppData                   │
+│ ☐  .cache                    │
+│ ☐  $RECYCLE.BIN              │
+└─────────────────────────────┘
 ```
 
-This should open the PDF using the operating system's default application.
+But **do not add heavy borders around every row**.
 
-It should not dominate the UI.
+The dialog should remain lightweight.
+
+Use spacing and alignment instead of individual cards.
 
 ---
 
-# 11. UI Should Feel Like SearchForge
+## Interaction
 
-The PDF should feel integrated into SearchForge.
-
-It should NOT feel like:
+Unchecked:
 
 ```text
-Chrome embedded inside SearchForge
+☐ node_modules
 ```
 
-and it should NOT feel like:
+Checked:
 
 ```text
-Adobe Reader embedded inside SearchForge
+☑ node_modules
 ```
 
-Instead:
+Hover should only produce a **very subtle background change**.
 
-```text
-SearchForge
-    ↓
-beautiful minimal preview
-    ↓
-real PDF rendering
-```
+Do not create:
+
+- glowing controls
+- bright borders
+- large hover effects
+- oversized checkboxes
+- colorful boxes
+
+The yellow accent can be used for the checked/active state, but very subtly.
 
 ---
 
-# 12. PDF Renderer Selection
+## Dialog Polish
 
-Inspect the existing project and choose a **mature PDF rendering engine** capable of rendering real PDF pages.
-
-The renderer must support:
-
-- fonts
-- images
-- vector graphics
-- page layouts
-- Unicode
-- multilingual documents
-- normal PDF features
-
-Prioritize:
-
-1. Rendering correctness
-2. Stability
-3. Windows compatibility
-4. Performance
-5. Memory usage
-6. Dependency size
-
-Do not use a simplistic PDF parser that only extracts text.
-
-Do not implement a PDF renderer yourself.
-
----
-
-# 13. Never Block egui
-
-Rendering must happen outside the UI thread whenever it is expensive.
-
-Architecture should resemble:
+Keep the existing:
 
 ```text
-egui
- │
- │ request page 20
- ↓
-background PDF worker
- │
- │ render
- ↓
-rendered page
- │
- ↓
-egui texture
- │
- ↓
-display
+Exclusion Filters                         ×
 ```
 
-The application must remain responsive while rendering.
+header.
 
-No:
+Improve:
 
-```text
-Not Responding
-```
+- icon alignment
+- checkbox alignment
+- row spacing
+- text alignment
+- input alignment
+- Add button alignment
+- Reset Defaults placement
+- Done button placement
 
-No freezing while opening a large PDF.
+The dialog should feel like part of SearchForge rather than a separate UI component.
 
----
-
-# 14. Texture Caching
-
-Cache rendered pages.
-
-For example:
-
-```text
-Page 20 → texture
-Page 21 → texture
-Page 22 → texture
-```
-
-When the user scrolls away from them, allow old textures to be evicted according to a reasonable memory limit.
-
-Do not permanently keep every page.
-
----
-
-# 15. High-Quality Scaling
-
-Pages should scale according to the available preview width.
-
-For example:
+Desired hierarchy:
 
 ```text
-small window
-     ↓
-smaller page
+Exclusion Filters                         ×
 
-large window
-     ↓
-larger page
-```
+Paths matching any of these patterns
+will be skipped:
 
-Maintain the PDF's original aspect ratio.
+☐ node_modules
+☐ .git
+☐ target
+☐ AppData
+☐ .cache
+☐ $RECYCLE.BIN
 
-Never stretch pages.
+[ Enter custom pattern... ] [ Add ]
 
-Never distort them.
-
-Use a clean centered layout.
-
----
-
-# 16. Background Around the Page
-
-The application can use a subtle dark background around the document.
-
-The actual PDF page can remain visually similar to paper.
-
-Conceptually:
-
-```text
-dark application background
-
-          ┌───────────────┐
-          │               │
-          │   PDF PAGE    │
-          │               │
-          └───────────────┘
-
-dark application background
-```
-
-No giant card surrounding the page.
-
-No heavy border.
-
-No excessive shadow.
-
----
-
-# 17. Remove the Current Broken Implementation
-
-Find the code responsible for producing:
-
-```text
-??
-??
-??
-```
-
-and remove the incorrect PDF text-preview path.
-
-Do not simply hide the question marks.
-
-Fix the architecture.
-
-The correct behavior is:
-
-```text
-is_pdf(path)
-    ↓
-PdfPreview
-    ↓
-real renderer
-```
-
-not:
-
-```text
-is_pdf(path)
-    ↓
-generic TextPreview
+Reset Defaults                         Done
 ```
 
 ---
 
-# 18. Keep Other File Previews Separate
+## Critical Implementation Requirement
 
-Use a clean preview dispatch:
+Inspect the **actual existing implementation** of the Exclusion Filters dialog.
 
-```rust
-match file_type {
-    FileType::Pdf => PdfPreview,
-    FileType::Image => ImagePreview,
-    FileType::Text => TextPreview,
-    FileType::Binary => BinaryPreview,
-}
-```
+Find why the icons/checkboxes are rendering incorrectly.
 
-PDFs must never fall through to the generic text renderer.
+Do not simply change their color or size.
 
----
+Determine whether the problem comes from:
 
-# 19. Performance Target
+- incorrect icon rendering
+- unsupported glyph
+- wrong font
+- incorrect egui widget
+- bad layout
+- incorrect image/icon asset
+- invalid texture
+- incorrect checkbox implementation
 
-Opening a PDF should feel immediate.
+Then fix the underlying cause.
 
-Initial sequence:
+**Do not replace the broken icon with another potentially unsupported Unicode character.**
 
-```text
-select PDF
-     ↓
-metadata immediately
-     ↓
-first visible page starts rendering
-     ↓
-page appears
-     ↓
-user can immediately scroll
-     ↓
-additional pages render lazily
-```
-
-Do not wait for the entire PDF before showing anything.
+Prefer native egui controls/primitives.
 
 ---
 
-# 20. Final Visual Target
+## Final Verification
 
-The final result should communicate:
+After fixing it, launch SearchForge and manually verify:
 
-> **"This is a PDF."**
+- [ ] Every exclusion row has a correctly rendered checkbox
+- [ ] Checked state is visually obvious
+- [ ] Unchecked state is visually obvious
+- [ ] Clicking works
+- [ ] Hover is subtle
+- [ ] All rows align perfectly
+- [ ] No broken icons remain
+- [ ] No strange glyphs remain
+- [ ] No layout overlap
+- [ ] Add input still works
+- [ ] Reset Defaults still works
+- [ ] Done still works
+- [ ] Dialog remains compact and lightweight
 
-not:
-
-> **"This is a PDF parser."**
-
-and not:
-
-> **"This is a miniature Chrome window."**
-
-It should feel like a **native, minimal, premium SearchForge document preview**.
-
-The formula is:
-
-```text
-Chrome-quality PDF rendering
-+
-SearchForge minimalism
--
-Chrome PDF toolbar
--
-sidebar
--
-heavy borders
--
-unnecessary controls
--
-PDF text extraction
-```
-
----
-
-## Acceptance Criteria
-
-The implementation is complete only when:
-
-- [ ] PDFs display as **actual rendered pages**
-- [ ] No `??` appears anywhere
-- [ ] No raw PDF/binary data is displayed
-- [ ] PDF pages look like the original document
-- [ ] Arabic/Persian/Unicode PDFs render correctly
-- [ ] Scrolling feels natural
-- [ ] No thumbnail sidebar
-- [ ] No unnecessary PDF toolbar
-- [ ] No giant PDF header
-- [ ] Only minimal metadata is shown
-- [ ] Pages are lazy-rendered
-- [ ] Pages are cached intelligently
-- [ ] PDF rendering does not freeze egui
-- [ ] Large PDFs remain usable
-- [ ] External "Open" action still works
-- [ ] UI remains sleek and lightweight
-- [ ] Existing text/image previews continue working
-- [ ] No egui ID collision warnings
-- [ ] `cargo check` passes
-- [ ] `cargo clippy` passes
-- [ ] tests pass
-
-**Do not declare success merely because the PDF opens.**
-
-The PDF must **look like a real PDF**, render correctly, scroll naturally, and feel like a polished native component of SearchForge.
+**Do not change anything outside the Exclusion Filters dialog.**

@@ -112,15 +112,9 @@ impl PdfRenderer {
             return count;
         }
 
-        // Quick page count check using lopdf or quick pdfium check
-        let count = if let Ok(doc) = lopdf::Document::load(path) {
-            doc.get_pages().len().min(u16::MAX as usize) as u16
-        } else {
-            1
-        };
-
-        self.page_counts.insert(path.to_string(), count);
-        count
+        // Return 1 initially and let background thread determine or render without freezing the UI thread
+        self.page_counts.insert(path.to_string(), 1);
+        1
     }
 
     pub fn receive_rendered_textures(&mut self, ctx: &Context) {

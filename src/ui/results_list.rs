@@ -14,6 +14,7 @@ pub fn file_badge_info(name: &str, is_dir: bool) -> (&'static str, Color32) {
         .to_lowercase();
 
     match ext.as_str() {
+        "lnk" => ("APP", Color32::from_rgb(0, 195, 240)),
         "md" | "markdown" => ("MD", Color32::from_rgb(180, 140, 240)),
         "txt" | "rtf" | "log" => ("TXT", Color32::from_rgb(160, 165, 180)),
         "pdf" => ("PDF", Color32::from_rgb(240, 75, 75)),
@@ -51,24 +52,28 @@ pub fn render_results_list(
     selected_index: &mut Option<usize>,
 ) {
     if results.is_empty() {
-        ui.add_space(40.0);
+        let total_h = ui.available_height();
+        let content_approx_h = 90.0;
+        let top_pad = ((total_h - content_approx_h) / 2.0).max(20.0);
+
+        ui.add_space(top_pad);
         ui.vertical_centered(|ui| {
             ui.label(
                 egui::RichText::new("🔍")
-                    .size(28.0)
-                    .color(Color32::from_rgb(100, 105, 120)),
+                    .size(22.0)
+                    .color(Color32::from_rgb(85, 90, 105)),
             );
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new("No files found")
-                    .color(Color32::from_rgb(160, 165, 180))
-                    .size(13.0)
+                    .color(Color32::from_rgb(205, 210, 220))
+                    .size(13.5)
                     .strong(),
             );
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new("Type to search Downloads, Documents, Desktop")
-                    .color(Color32::from_rgb(110, 115, 130))
+                egui::RichText::new("Type to search files and installed apps")
+                    .color(Color32::from_rgb(115, 120, 135))
                     .size(11.0),
             );
         });
@@ -81,15 +86,20 @@ pub fn render_results_list(
         let is_selected = *selected_index == Some(idx);
         let (badge_text, badge_color) = file_badge_info(&record.name, record.is_dir);
 
+        let row_id = ui.make_persistent_id(format!("result_row_{}", idx));
+        let was_hovered = ui.data(|d| d.get_temp::<bool>(row_id).unwrap_or(false));
+
         let bg_color = if is_selected {
-            Color32::from_rgb(30, 33, 44)
+            Color32::from_rgb(32, 35, 46)
+        } else if was_hovered {
+            Color32::from_rgb(24, 26, 33) // Almost imperceptible surface lightening
         } else {
             Color32::TRANSPARENT
         };
 
         let row_frame = Frame::none()
             .fill(bg_color)
-            .rounding(Rounding::same(6.0))
+            .rounding(Rounding::same(5.0))
             .inner_margin(Margin::symmetric(8.0, 7.0));
 
         let response = row_frame.show(ui, |ui| {
@@ -122,7 +132,12 @@ pub fn render_results_list(
 
                 // File name & breadcrumb path
                 ui.vertical(|ui| {
-                    let truncated_name = truncate_string(&record.name, 26);
+                    let display_name = if record.name.to_lowercase().ends_with(".lnk") {
+                        record.name[..record.name.len().saturating_sub(4)].to_string()
+                    } else {
+                        record.name.clone()
+                    };
+                    let truncated_name = truncate_string(&display_name, 34);
                     ui.label(
                         egui::RichText::new(truncated_name)
                             .size(13.0)
@@ -130,7 +145,7 @@ pub fn render_results_list(
                             .color(if is_selected {
                                 Color32::WHITE
                             } else {
-                                Color32::from_rgb(215, 220, 230)
+                                Color32::from_rgb(220, 225, 235)
                             }),
                     );
 
@@ -138,11 +153,15 @@ pub fn render_results_list(
                         .parent()
                         .and_then(|p| p.to_str())
                         .unwrap_or("");
-                    let truncated_parent = truncate_string(parent, 28);
+                    let truncated_parent = truncate_string(parent, 36);
                     ui.label(
                         egui::RichText::new(truncated_parent)
-                            .size(10.5)
-                            .color(Color32::from_rgb(115, 120, 135)),
+                            .size(11.0)
+                            .color(if is_selected {
+                                Color32::from_rgb(150, 155, 175)
+                            } else {
+                                Color32::from_rgb(130, 135, 150)
+                            }),
                     );
                 });
 
@@ -150,6 +169,8 @@ pub fn render_results_list(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let size_text = if record.is_dir {
                         "DIR".to_string()
+                    } else if record.name.to_lowercase().ends_with(".lnk") {
+                        "APP".to_string()
                     } else {
                         format_size(record.size)
                     };
@@ -161,16 +182,20 @@ pub fn render_results_list(
                         .show(ui, |ui| {
                             ui.label(
                                 egui::RichText::new(size_text)
-                                    .size(10.5)
-                                    .color(Color32::from_rgb(140, 145, 160)),
+                                .size(10.5)
+                                .color(Color32::from_rgb(140, 145, 160)),
                             );
                         });
                 });
             });
         });
 
+        let interactive = response.response.interact(egui::Sense::click());
+        let is_now_hovered = interactive.hovered();
+        ui.data_mut(|d| d.insert_temp(row_id, is_now_hovered));
+
         // Click selection
-        if response.response.interact(egui::Sense::click()).clicked() {
+        if interactive.clicked() {
             *selected_index = Some(idx);
         }
 
