@@ -1,6 +1,22 @@
 [package]
-name = "SearchForge"
+name = "search_forge"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+eframe = "0.27"
+egui = "0.27"
+rusqlite = { version = "0.31", features = ["bundled"] }
+unicode-segmentation = "1.10"
+walkdir = "2.4"
+notify = "6.1"
+rfd = "0.13"
+dirs = "5.0"
+open = "5.1"
+env_logger = "0.11"
+egui_extras = { version = "0.27", features = ["all_loaders"] }
+calamine = "0.24"
+image = "0.24"
+lopdf = "0.32"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+pdfium-render = "0.9.4"
