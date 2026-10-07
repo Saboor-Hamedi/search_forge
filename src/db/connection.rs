@@ -1,4 +1,5 @@
 use crate::db::schema::CREATE_FILES_TABLE;
+use crate::indexer::app_scanner::SearchResultType;
 use crate::indexer::scanner::FileRecord;
 use rusqlite::{params, Connection, Result};
 
@@ -65,11 +66,18 @@ impl Database {
         };
         let mut stmt = self.conn.prepare(sql)?;
         let rows = stmt.query_map(params![pattern, limit as i64], |row| {
+            let is_dir: bool = row.get::<_, i32>(3)? != 0;
             Ok(FileRecord {
                 name: row.get(0)?,
                 path: row.get(1)?,
                 size: row.get::<_, i64>(2)? as u64,
-                is_dir: row.get::<_, i32>(3)? != 0,
+                is_dir,
+                item_type: if is_dir {
+                    SearchResultType::Folder
+                } else {
+                    SearchResultType::File
+                },
+                app_metadata: None,
             })
         })?;
 
@@ -88,11 +96,18 @@ impl Database {
              LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit as i64], |row| {
+            let is_dir: bool = row.get::<_, i32>(3)? != 0;
             Ok(FileRecord {
                 name: row.get(0)?,
                 path: row.get(1)?,
                 size: row.get::<_, i64>(2)? as u64,
-                is_dir: row.get::<_, i32>(3)? != 0,
+                is_dir,
+                item_type: if is_dir {
+                    SearchResultType::Folder
+                } else {
+                    SearchResultType::File
+                },
+                app_metadata: None,
             })
         })?;
 
@@ -117,18 +132,24 @@ mod tests {
                 path: "C:/docs/invoice_99.pdf".to_string(),
                 size: 1024,
                 is_dir: false,
+                item_type: SearchResultType::File,
+                app_metadata: None,
             },
             FileRecord {
                 name: "notes.md".to_string(),
                 path: "C:/docs/notes.md".to_string(),
                 size: 2048,
                 is_dir: false,
+                item_type: SearchResultType::File,
+                app_metadata: None,
             },
             FileRecord {
                 name: "code".to_string(),
                 path: "C:/projects/code".to_string(),
                 size: 0,
                 is_dir: true,
+                item_type: SearchResultType::Folder,
+                app_metadata: None,
             },
         ];
 

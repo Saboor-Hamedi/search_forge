@@ -3,6 +3,7 @@ use egui::{Color32, Context, Pos2, Rect, Rounding, Stroke, Vec2};
 use std::sync::{Arc, RwLock};
 
 use crate::indexer::filters::default_ignored_patterns;
+use crate::indexer::icon_cache::IconCache;
 use crate::indexer::scanner::{search_records, start_background_scan, FileRecord};
 use crate::ui::{filter_modal, footer, preview_panel, results_list, search_bar};
 use crate::utils::updater::UpdateManager;
@@ -18,6 +19,8 @@ pub struct SearchForgeApp {
     left_panel_width: f32,
     pdf_renderer: crate::ui::pdf_renderer::PdfRenderer,
     updater: UpdateManager,
+    icon_cache: IconCache,
+    initial_apps_loaded: bool,
 }
 
 impl SearchForgeApp {
@@ -44,7 +47,8 @@ impl SearchForgeApp {
 
         let store = Arc::new(RwLock::new(Vec::new()));
         let ignored_patterns = default_ignored_patterns();
-        start_background_scan(ignored_patterns.clone(), store.clone());
+        let icon_cache = IconCache::new();
+        start_background_scan(ignored_patterns.clone(), store.clone(), icon_cache.clone());
 
         Self {
             search_query: String::new(),
@@ -57,6 +61,8 @@ impl SearchForgeApp {
             left_panel_width: 440.0, // Centered by default (half of 880.0)
             pdf_renderer: crate::ui::pdf_renderer::PdfRenderer::new(),
             updater: UpdateManager::new(),
+            icon_cache,
+            initial_apps_loaded: false,
         }
     }
 }
@@ -99,23 +105,26 @@ impl App for SearchForgeApp {
         } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
             if let Some(idx) = self.selected_index {
                 if let Some(file) = self.results.get(idx) {
-                    let _ = open::that(&file.path);
+                    let _ = open::that(file.launch_target());
                 }
             }
         }
 
         let query_changed = self.search_query != self.last_search_query;
-        if query_changed {
-            if !self.search_query.trim().is_empty() {
-                // Maximum 5 results: blazing fast in-memory search
-                if let Ok(store_lock) = self.store.read() {
+        let needs_initial_population = !self.initial_apps_loaded && self.search_query.trim().is_empty();
+        if query_changed || needs_initial_population {
+            if let Ok(store_lock) = self.store.read() {
+                if !store_lock.is_empty() {
                     self.results = search_records(&store_lock, &self.search_query, 5);
-                    self.selected_index = if self.results.is_empty() { None } else { Some(0) };
+                    if query_changed {
+                        self.selected_index = if self.results.is_empty() { None } else { Some(0) };
+                    } else if self.selected_index.is_none() && !self.results.is_empty() {
+                        self.selected_index = Some(0);
+                    }
+                    if !self.results.is_empty() {
+                        self.initial_apps_loaded = true;
+                    }
                 }
-            } else {
-                // When deleting search query, clear results and preview instantly
-                self.results.clear();
-                self.selected_index = None;
             }
             self.last_search_query = self.search_query.clone();
         }
@@ -160,7 +169,7 @@ impl App for SearchForgeApp {
                         Vec2::new(self.left_panel_width, available_height),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            results_list::render_results_list(ui, &self.results, &mut self.selected_index);
+                            results_list::render_results_list(ui, &self.results, &mut self.selected_index, &self.icon_cache);
                         },
                     );
 
@@ -217,7 +226,7 @@ impl App for SearchForgeApp {
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             let selected_file = self.selected_index.and_then(|idx| self.results.get(idx));
-                            preview_panel::render_preview_panel(ui, selected_file, &mut self.pdf_renderer);
+                            preview_panel::render_preview_panel(ui, selected_file, &mut self.pdf_renderer, &self.icon_cache);
                         },
                     );
                 });
