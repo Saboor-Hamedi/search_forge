@@ -64,10 +64,11 @@ jobs:
           # Zip archive
           Compress-Archive -Path "target/${{ matrix.target }}/release/search_forge.exe" -DestinationPath "SearchForge-windows-x64.zip"
           
-          # Compile Inno Setup Installer
+          # Compile Inno Setup Installer (Interactive step-by-step wizard)
           choco install innosetup -y
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion="$ver" installer.iss
-          Move-Item "SearchForge-Setup.exe" "SearchForge-UserSetup-windows-x64.exe"
+          Copy-Item "SearchForge-Setup.exe" "SearchForge-Installer-windows-x64.exe"
+          Move-Item "SearchForge-Setup.exe" "SearchForge-Setup-windows-x64.exe"
 
       # Prepare Linux artifacts
       - name: Package Linux Binary & Tarball
