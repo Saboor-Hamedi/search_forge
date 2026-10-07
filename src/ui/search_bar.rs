@@ -27,15 +27,6 @@ pub fn render_search_bar(
         None
     };
 
-    // If Tab key is pressed and auto-completion is available, complete it!
-    if completion_suffix.is_some() {
-        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
-            if let Some(suggestion) = top_suggestion {
-                *query = suggestion.to_string();
-            }
-        }
-    }
-
     // Clean, borderless edge-to-edge container matching body background
     Frame::none()
         .fill(Color32::from_rgb(18, 19, 23))
@@ -56,23 +47,39 @@ pub fn render_search_bar(
                 let text_width = (ui.available_width() - right_controls_width).max(120.0);
 
                 // 2. Large, borderless, clean search input (+2px font size: 17.0px)
-                let text_edit = egui::TextEdit::singleline(query)
+                let output = egui::TextEdit::singleline(query)
                     .id(input_id)
                     .hint_text("Search files, software, code...")
                     .font(egui::FontId::proportional(17.0))
                     .text_color(Color32::WHITE)
                     .frame(false)
-                    .desired_width(text_width);
+                    .desired_width(text_width)
+                    .show(ui);
 
-                let response = ui.add(text_edit);
+                let response = output.response;
 
-                // Ghost auto-completion display behind or after cursor
+                // If Tab key was pressed and auto-completion is available, complete it and place cursor at end
+                if completion_suffix.is_some() {
+                    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
+                        if let Some(suggestion) = top_suggestion {
+                            *query = suggestion.to_string();
+                            // Move text cursor to the very end of completed text
+                            let char_len = query.chars().count();
+                            let cursor = egui::text::CCursor::new(char_len);
+                            let mut state = egui::text_edit::TextEditState::load(ui.ctx(), input_id).unwrap_or_default();
+                            state.cursor.set_char_range(Some(egui::text::CCursorRange::one(cursor)));
+                            state.store(ui.ctx(), input_id);
+                        }
+                    }
+                }
+
+                // Ghost auto-completion display positioned directly matching text baseline
                 if let Some(suffix) = completion_suffix {
-                    // Paint ghost completion text right after current typed text position
                     let font_id = egui::FontId::proportional(17.0);
-                    let typed_galley = ui.painter().layout_no_wrap(query.clone(), font_id.clone(), Color32::WHITE);
-                    let ghost_x = response.rect.min.x + typed_galley.size().x;
-                    let ghost_pos = Pos2::new(ghost_x, response.rect.min.y);
+                    // Use text galley for exact pixel offset and vertical baseline
+                    let galley = output.galley;
+                    let ghost_x = response.rect.min.x + galley.size().x;
+                    let ghost_pos = Pos2::new(ghost_x, response.rect.min.y + 1.0);
 
                     ui.painter().text(
                         ghost_pos,

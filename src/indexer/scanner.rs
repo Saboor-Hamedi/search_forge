@@ -83,10 +83,14 @@ pub fn score_record(norm_query: &str, record: &FileRecord) -> i64 {
         let display_name = record.display_name();
         let norm_app_name = normalize_for_search(display_name);
 
-        // 1. Exact match or major priority match
+        // 1. Exact match or major priority match (Terminal, cmd, etc.)
         if (norm_query == "terminal" || norm_query == "term" || norm_query == "wt")
             && (norm_app_name.contains("terminal") || norm_app_name == "windows terminal" || norm_app_name == "wt")
         {
+            // Windows Terminal gets supreme ranking
+            if norm_app_name.contains("windows terminal") || norm_app_name == "wt" {
+                return 32_000;
+            }
             return 30_000;
         }
 
@@ -98,6 +102,9 @@ pub fn score_record(norm_query: &str, record: &FileRecord) -> i64 {
         let acronym = extract_acronym(&norm_app_name);
         if acronym == norm_query {
             return 22_000;
+        }
+        if norm_query == "cmd" && (norm_app_name.contains("command prompt") || norm_app_name.contains("terminal")) {
+            return 25_000;
         }
         if norm_query == "vscode" && norm_app_name.contains("visual studio code") {
             return 22_000;
@@ -131,6 +138,9 @@ pub fn score_record(norm_query: &str, record: &FileRecord) -> i64 {
 
         // 5. Application name contains query substring
         if norm_app_name.contains(norm_query) {
+            if norm_query.len() >= 3 && norm_app_name.contains("terminal") {
+                return 28_000;
+            }
             return 13_000;
         }
 
