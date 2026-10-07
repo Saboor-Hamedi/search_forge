@@ -260,6 +260,18 @@ impl UpdateManager {
                 let path_str = installer_path.to_string_lossy().to_string();
                 let _ = std::process::Command::new(&path_str).spawn();
             }
+            #[cfg(target_os = "macos")]
+            {
+                let _ = open::that(&installer_path);
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let _ = std::process::Command::new("chmod")
+                    .arg("+x")
+                    .arg(installer_path)
+                    .status();
+                let _ = std::process::Command::new(installer_path).spawn();
+            }
             std::process::exit(0);
         }
     }
@@ -296,23 +308,71 @@ fn is_newer_version(current: &str, candidate: &str) -> bool {
 }
 
 fn find_best_asset(assets: &[AssetMinimal]) -> (Option<String>, Option<String>, u64) {
-    // Prefer Windows user setup installer
+    #[cfg(target_os = "windows")]
+    {
+        // 1. Prefer Windows User Setup installer
+        for a in assets {
+            if a.name.to_lowercase().contains("usersetup") || (a.name.to_lowercase().contains("setup") && a.name.ends_with(".exe")) {
+                return (Some(a.browser_download_url.clone()), Some(a.name.clone()), a.size);
+            }
+        }
+        // 2. Fallback to standalone Windows .exe
+        for a in assets {
+            if a.name.ends_with(".exe") {
+                return (Some(a.browser_download_url.clone()), Some(a.name.clone()), a.size);
+            }
+        }
+        // 3. Fallback to Windows .zip
+        for a in assets {
+            if a.name.to_lowercase().contains("windows") && a.name.ends_with(".zip") {
+                return (Some(a.browser_download_url.clone()), Some(a.name.clone()), a.size);
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // 1. Prefer Linux standalone binary
+        for a in assets {
+            if a.name.to_lowercase().contains("linux") && !a.name.ends_with(".zip") && !a.name.ends_with(".tar.gz") {
+                return (Some(a.browser_download_url.clone()), Some(a.name.clone()), a.size);
+            }
+        }
+        // 2. Fallback to tar.gz or zip
+        for a in assets {
+            if a.name.to_lowercase().contains("linux") && (a.name.ends_with(".tar.gz") || a.name.ends_with(".zip")) {
+                return (Some(a.browser_download_url.clone()), Some(a.name.clone()), a.size);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        #[cfg(target_arch = "aarch64")]
+        let arch_tag = "arm64";
+        #[cfg(not(target_arch = "aarch64"))]
+        let arch_tag = "x64";
+
+        // 1. Prefer matching architecture binary or zip
+        for a in assets {
+            if a.name.to_lowercase().contains("macos") && a.name.contains(arch_tag) {
+                return (Some(a.browser_download_url.clone()), Some(a.name.clone()), a.size);
+            }
+        }
+        // 2. Fallback to any macos asset
+        for a in assets {
+            if a.name.to_lowercase().contains("macos") {
+                return (Some(a.browser_download_url.clone()), Some(a.name.clone()), a.size);
+            }
+        }
+    }
+
+    // Generic fallback if OS-specific search didn't match
     for a in assets {
-        if a.name.to_lowercase().contains("usersetup") || (a.name.to_lowercase().contains("setup") && a.name.ends_with(".exe")) {
+        if a.name.ends_with(".zip") || a.name.ends_with(".exe") {
             return (Some(a.browser_download_url.clone()), Some(a.name.clone()), a.size);
         }
     }
-    // Fallback to any .exe
-    for a in assets {
-        if a.name.ends_with(".exe") {
-            return (Some(a.browser_download_url.clone()), Some(a.name.clone()), a.size);
-        }
-    }
-    // Fallback to .zip
-    for a in assets {
-        if a.name.ends_with(".zip") {
-            return (Some(a.browser_download_url.clone()), Some(a.name.clone()), a.size);
-        }
-    }
+
     (None, None, 0)
 }
