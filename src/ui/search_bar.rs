@@ -6,6 +6,7 @@ pub fn render_search_bar(
     open_settings: &mut bool,
     _result_count: usize,
     top_suggestion: Option<&str>,
+    hide_on_close: bool,
 ) {
     let input_id = egui::Id::new("main_search_text_edit");
 
@@ -137,9 +138,13 @@ pub fn render_search_bar(
                         Stroke::new(1.4, stroke_col),
                     );
 
-                    if close_resp.on_hover_text("Close SearchForge").clicked() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                        std::process::exit(0);
+                    if close_resp.on_hover_text(if hide_on_close { "Hide SearchForge (Spotlight mode)" } else { "Close SearchForge" }).clicked() {
+                        if hide_on_close {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        } else {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                            std::process::exit(0);
+                        }
                     }
 
                     // Filter toggle button (⚙ Filter) - Flat styling with hover background matching file row

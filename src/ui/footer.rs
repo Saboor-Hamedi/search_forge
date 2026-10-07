@@ -1,10 +1,13 @@
 use egui::{Color32, Rect, Rounding, Stroke, Ui, Vec2};
+use crate::utils::config::AppConfig;
 use crate::utils::updater::{UpdateManager, UpdateState, CURRENT_VERSION};
 
 pub fn render_footer(
     ui: &mut Ui,
     updater: &mut UpdateManager,
     indexed_count: usize,
+    open_preferences: &mut bool,
+    config: &mut AppConfig,
 ) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
@@ -34,8 +37,47 @@ pub fn render_footer(
                 .color(status_color),
         );
 
-        // Right side: Interactive multi-state Update / Download / Restart button
+        // Right side: Interactive multi-state Update / Download / Restart button & Preferences Gear
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+
+            // Settings / Preferences Gear button (right beside update button)
+            let pref_btn_id = ui.make_persistent_id("footer_preferences_gear_btn");
+            let was_pref_hovered = ui.data(|d| d.get_temp::<bool>(pref_btn_id).unwrap_or(false));
+            let pref_btn = ui.add(
+                egui::Button::new(
+                    egui::RichText::new("⚙")
+                        .size(13.0)
+                        .color(if *open_preferences {
+                            Color32::from_rgb(255, 230, 0)
+                        } else if was_pref_hovered {
+                            Color32::WHITE
+                        } else {
+                            Color32::from_rgb(140, 145, 160)
+                        }),
+                )
+                .fill(if *open_preferences {
+                    Color32::from_rgb(34, 38, 48)
+                } else if was_pref_hovered {
+                    Color32::from_rgb(26, 28, 36)
+                } else {
+                    Color32::TRANSPARENT
+                })
+                .stroke(Stroke::NONE)
+                .rounding(Rounding::same(4.0))
+                .min_size(Vec2::new(22.0, 22.0)),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("Preferences: Startup & Spotlight settings");
+
+            let pref_rect = pref_btn.rect;
+            ui.data_mut(|d| d.insert_temp(pref_btn_id, pref_btn.hovered()));
+            if pref_btn.clicked() {
+                *open_preferences = !*open_preferences;
+            }
+
+            // Render preferences menu popup when open
+            crate::ui::settings_menu::render_settings_menu(ui, open_preferences, config, pref_rect);
             match updater.state() {
                 UpdateState::Idle => {
                     let btn_id = ui.make_persistent_id("update_idle_btn");

@@ -21,6 +21,8 @@ pub struct SearchForgeApp {
     updater: UpdateManager,
     icon_cache: IconCache,
     initial_apps_loaded: bool,
+    config: crate::utils::config::AppConfig,
+    open_preferences: bool,
 }
 
 impl SearchForgeApp {
@@ -50,6 +52,8 @@ impl SearchForgeApp {
         let icon_cache = IconCache::new();
         start_background_scan(ignored_patterns.clone(), store.clone(), icon_cache.clone());
 
+        let config = crate::utils::config::AppConfig::load();
+
         Self {
             search_query: String::new(),
             last_search_query: String::new(),
@@ -63,6 +67,8 @@ impl SearchForgeApp {
             updater: UpdateManager::new(),
             icon_cache,
             initial_apps_loaded: false,
+            config,
+            open_preferences: false,
         }
     }
 }
@@ -72,6 +78,17 @@ impl App for SearchForgeApp {
         // Poll background updater events on each frame
         self.updater.poll_updates();
 
+        // Global Spotlight close/hide: Ctrl + K closes or hides the app
+        let ctrl_k_pressed = ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::K) || i.consume_key(egui::Modifiers::CTRL, egui::Key::K));
+        if ctrl_k_pressed {
+            if self.config.hide_on_close {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                std::process::exit(0);
+            }
+        }
+
         // High-priority Escape key handling: works even when the search bar is focused!
         let esc_pressed = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         if esc_pressed {
@@ -79,9 +96,17 @@ impl App for SearchForgeApp {
                 self.search_query.clear();
                 self.results.clear();
                 self.selected_index = None;
+            } else if self.open_preferences {
+                self.open_preferences = false;
+            } else if self.open_settings {
+                self.open_settings = false;
             } else {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                std::process::exit(0);
+                if self.config.hide_on_close {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                } else {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    std::process::exit(0);
+                }
             }
         }
 
@@ -145,7 +170,14 @@ impl App for SearchForgeApp {
 
                 // 1. Top Search Bar (Flush borderless input, cleanly placed right action buttons, with auto-completion)
                 let top_suggestion = self.results.first().map(|r| r.display_name().to_string());
-                search_bar::render_search_bar(ui, &mut self.search_query, &mut self.open_settings, self.results.len(), top_suggestion.as_deref());
+                search_bar::render_search_bar(
+                    ui,
+                    &mut self.search_query,
+                    &mut self.open_settings,
+                    self.results.len(),
+                    top_suggestion.as_deref(),
+                    self.config.hide_on_close,
+                );
 
                 // Subtle divider below search bar
                 let divider_y = ui.cursor().top();
@@ -249,7 +281,13 @@ impl App for SearchForgeApp {
                     .fill(Color32::from_rgb(16, 17, 21))
                     .inner_margin(egui::Margin::symmetric(14.0, 7.0))
                     .show(ui, |ui| {
-                        footer::render_footer(ui, &mut self.updater, total_indexed);
+                        footer::render_footer(
+                            ui,
+                            &mut self.updater,
+                            total_indexed,
+                            &mut self.open_preferences,
+                            &mut self.config,
+                        );
                     });
             });
     }
