@@ -83,20 +83,21 @@ pub fn score_record(norm_query: &str, record: &FileRecord) -> i64 {
         let display_name = record.display_name();
         let norm_app_name = normalize_for_search(display_name);
 
-        // 1. Exact match on application name
+        // 1. Exact match or major priority match
+        if (norm_query == "terminal" || norm_query == "term" || norm_query == "wt")
+            && (norm_app_name.contains("terminal") || norm_app_name == "windows terminal" || norm_app_name == "wt")
+        {
+            return 30_000;
+        }
+
         if norm_app_name == norm_query {
-            return 25_000;
+            return 26_000;
         }
 
         // 2. Acronym or canonical alias match
         let acronym = extract_acronym(&norm_app_name);
         if acronym == norm_query {
             return 22_000;
-        }
-        if (norm_query == "terminal" || norm_query == "wt")
-            && (norm_app_name.contains("terminal") || norm_app_name.contains("wt"))
-        {
-            return 25_000;
         }
         if norm_query == "vscode" && norm_app_name.contains("visual studio code") {
             return 22_000;
@@ -366,26 +367,26 @@ pub fn search_records(store: &[FileRecord], query: &str, limit: usize) -> Vec<Fi
     }
 
     let remaining_needed = limit - app_matches.len();
-    let mut file_matches: Vec<FileRecord> = Vec::with_capacity(remaining_needed);
+    let mut file_matches: Vec<(i64, &FileRecord)> = Vec::new();
 
-    // Tier 2: Search ordinary files with early exit as soon as limit is satisfied
+    // Tier 2: Search ordinary files, score them, and sort by relevance
     for record in store {
         if record.item_type != SearchResultType::Application {
-            let norm_name = normalize_for_search(&record.name);
-            if norm_name.contains(&norm_query) {
-                file_matches.push(record.clone());
-                if file_matches.len() >= remaining_needed {
-                    break; // Early exit: stops scanning remaining 100,000+ files
-                }
+            let score = score_record(&norm_query, record);
+            if score > 0 {
+                file_matches.push((score, record));
             }
         }
     }
+    file_matches.sort_by(|a, b| b.0.cmp(&a.0));
 
     let mut result = Vec::with_capacity(limit);
     for (_, app) in app_matches {
         result.push(app.clone());
     }
-    result.extend(file_matches);
+    for (_, file) in file_matches.into_iter().take(remaining_needed) {
+        result.push(file.clone());
+    }
     result
 }
 

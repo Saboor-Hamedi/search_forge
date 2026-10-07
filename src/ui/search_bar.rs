@@ -5,8 +5,36 @@ pub fn render_search_bar(
     query: &mut String,
     open_settings: &mut bool,
     _result_count: usize,
+    top_suggestion: Option<&str>,
 ) {
     let input_id = egui::Id::new("main_search_text_edit");
+
+    // Check if auto-completion applies
+    let completion_suffix = if !query.trim().is_empty() {
+        if let Some(suggestion) = top_suggestion {
+            let lower_q = query.to_lowercase();
+            let lower_s = suggestion.to_lowercase();
+            if lower_s.starts_with(&lower_q) && lower_s.len() > lower_q.len() {
+                // Suffix to display after typed query
+                Some(&suggestion[query.len()..])
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // If Tab key is pressed and auto-completion is available, complete it!
+    if completion_suffix.is_some() {
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
+            if let Some(suggestion) = top_suggestion {
+                *query = suggestion.to_string();
+            }
+        }
+    }
 
     // Clean, borderless edge-to-edge container matching body background
     Frame::none()
@@ -37,6 +65,24 @@ pub fn render_search_bar(
                     .desired_width(text_width);
 
                 let response = ui.add(text_edit);
+
+                // Ghost auto-completion display behind or after cursor
+                if let Some(suffix) = completion_suffix {
+                    // Paint ghost completion text right after current typed text position
+                    let font_id = egui::FontId::proportional(17.0);
+                    let typed_galley = ui.painter().layout_no_wrap(query.clone(), font_id.clone(), Color32::WHITE);
+                    let ghost_x = response.rect.min.x + typed_galley.size().x;
+                    let ghost_pos = Pos2::new(ghost_x, response.rect.min.y);
+
+                    ui.painter().text(
+                        ghost_pos,
+                        egui::Align2::LEFT_TOP,
+                        suffix,
+                        font_id,
+                        Color32::from_rgb(85, 90, 105), // Subtle ghost gray
+                    );
+                }
+
                 let has_focused_id = ui.make_persistent_id("search_input_initial_focused");
                 let has_focused = ui.data(|d| d.get_temp::<bool>(has_focused_id).unwrap_or(false));
                 if !has_focused {

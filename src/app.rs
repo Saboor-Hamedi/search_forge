@@ -89,7 +89,7 @@ impl App for SearchForgeApp {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
             if !self.results.is_empty() {
                 let next = match self.selected_index {
-                    Some(idx) => (idx + 1).min(self.results.len().min(5) - 1),
+                    Some(idx) => (idx + 1).min(self.results.len().min(10) - 1),
                     None => 0,
                 };
                 self.selected_index = Some(next);
@@ -115,7 +115,7 @@ impl App for SearchForgeApp {
         if query_changed || needs_initial_population {
             if let Ok(store_lock) = self.store.read() {
                 if !store_lock.is_empty() {
-                    self.results = search_records(&store_lock, &self.search_query, 5);
+                    self.results = search_records(&store_lock, &self.search_query, 10);
                     if query_changed {
                         self.selected_index = if self.results.is_empty() { None } else { Some(0) };
                     } else if self.selected_index.is_none() && !self.results.is_empty() {
@@ -143,8 +143,9 @@ impl App for SearchForgeApp {
             .show(ctx, |ui| {
                 let available_total_w = ui.available_width();
 
-                // 1. Top Search Bar (Flush borderless input, cleanly placed right action buttons)
-                search_bar::render_search_bar(ui, &mut self.search_query, &mut self.open_settings, self.results.len());
+                // 1. Top Search Bar (Flush borderless input, cleanly placed right action buttons, with auto-completion)
+                let top_suggestion = self.results.first().map(|r| r.display_name().to_string());
+                search_bar::render_search_bar(ui, &mut self.search_query, &mut self.open_settings, self.results.len(), top_suggestion.as_deref());
 
                 // Subtle divider below search bar
                 let divider_y = ui.cursor().top();

@@ -60,6 +60,12 @@ pub fn render_preview_panel(
 
     // Top metadata header for regular files (Clean, quiet, borderless)
     let (badge_text, badge_color) = file_badge_info(&file.name, file.is_dir);
+    let ext = Path::new(&file.path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let is_pdf = ext == "pdf";
 
     ui.horizontal(|ui| {
         // Clean typography badge
@@ -78,33 +84,44 @@ pub fn render_preview_panel(
         ui.add_space(8.0);
 
         ui.vertical(|ui| {
-            let truncated_name = truncate_preview_string(&file.name, 44);
-            ui.label(
-                egui::RichText::new(truncated_name)
-                    .size(14.0)
-                    .strong()
-                    .color(Color32::WHITE),
-            );
-            let truncated_path = truncate_preview_string(&file.path, 48);
-            ui.label(
-                egui::RichText::new(truncated_path)
-                    .size(11.0)
-                    .color(Color32::from_rgb(130, 135, 150)),
-            );
+            if is_pdf {
+                // When a PDF shows up, remove the title and just keep the path on the header
+                let truncated_path = truncate_preview_string(&file.path, 54);
+                ui.label(
+                    egui::RichText::new(truncated_path)
+                        .size(12.5)
+                        .color(Color32::from_rgb(175, 180, 195)),
+                );
+            } else {
+                let truncated_name = truncate_preview_string(&file.name, 44);
+                ui.label(
+                    egui::RichText::new(truncated_name)
+                        .size(14.0)
+                        .strong()
+                        .color(Color32::WHITE),
+                );
+                let truncated_path = truncate_preview_string(&file.path, 48);
+                ui.label(
+                    egui::RichText::new(truncated_path)
+                        .size(11.0)
+                        .color(Color32::from_rgb(130, 135, 150)),
+                );
+            }
         });
 
-        // Sleek, fully round "Open" button on the right side of preview header
+        // Yellow signature "Open" button on the right side of preview header, shifted to the left
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(8.0); // Shifted a little bit to the left away from far right edge
             let open_btn = egui::Button::new(
                 egui::RichText::new("Open ↗")
-                    .size(11.5)
+                    .size(12.0)
                     .strong()
-                    .color(Color32::from_rgb(220, 225, 235)),
+                    .color(Color32::BLACK),
             )
-            .fill(Color32::from_rgb(32, 35, 46))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(52, 56, 70)))
+            .fill(Color32::from_rgb(255, 230, 0)) // Yellow background matching Launch button
+            .stroke(Stroke::NONE)
             .rounding(Rounding::same(14.0))
-            .min_size(Vec2::new(72.0, 26.0));
+            .min_size(Vec2::new(76.0, 26.0));
 
             if ui
                 .add(open_btn)

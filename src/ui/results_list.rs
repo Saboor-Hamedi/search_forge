@@ -99,9 +99,13 @@ pub fn render_results_list(
         return;
     }
 
-    ui.add_space(4.0);
-    // Display maximum of 5 results as requested
-    for (idx, record) in results.iter().take(5).enumerate() {
+    egui::ScrollArea::vertical()
+        .id_source("results_list_scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.add_space(4.0);
+            // Display maximum of 10 results as requested
+            for (idx, record) in results.iter().take(10).enumerate() {
         let is_selected = *selected_index == Some(idx);
         let is_app = record.is_app();
 
@@ -288,4 +292,5 @@ pub fn render_results_list(
 
         ui.add_space(5.0);
     }
+        });
 }
