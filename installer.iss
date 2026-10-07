@@ -20,7 +20,7 @@ UninstallDisplayIcon={app}\search_forge.exe
 CloseApplications=force
 
 [Files]
-Source: "target\release\search_forge.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "target\x86_64-pc-windows-msvc\release\search_forge.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
