@@ -12,7 +12,7 @@ use eframe::NativeOptions;
 fn main() -> Result<(), eframe::Error> {
     env_logger::init();
 
-    let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("assets/icons/image.png")).ok();
+    let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("assets/icons/image_64.png")).ok();
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([780.0, 480.0])

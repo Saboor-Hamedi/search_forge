@@ -6,13 +6,15 @@ const SETTINGS_FILE_NAME: &str = "settings.json";
 pub struct AppConfig {
     pub autostart: bool,
     pub hide_on_close: bool,
+    pub spotlight_mode: bool,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            autostart: false,
-            hide_on_close: true, // Spotlight mode defaults to true
+            autostart: true,
+            hide_on_close: true,
+            spotlight_mode: true, // Spotlight mode on by default
         }
     }
 }
@@ -47,12 +49,22 @@ impl AppConfig {
         }
     }
 
+    pub fn set_spotlight_mode(&mut self, enable: bool) {
+        self.spotlight_mode = enable;
+        self.autostart = enable;
+        self.hide_on_close = enable;
+        self.save();
+        Self::sync_system_autostart(enable);
+    }
+
+    #[allow(dead_code)]
     pub fn set_autostart(&mut self, enable: bool) {
         self.autostart = enable;
         self.save();
         Self::sync_system_autostart(enable);
     }
 
+    #[allow(dead_code)]
     pub fn set_hide_on_close(&mut self, enable: bool) {
         self.hide_on_close = enable;
         self.save();

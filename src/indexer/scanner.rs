@@ -272,6 +272,33 @@ pub fn start_background_scan(
             }
         }
 
+        // Automatic discovery of all available drives (A:\, B:\, C:\, D:\, etc.)
+        #[cfg(target_os = "windows")]
+        {
+            for drive_letter in b'A'..=b'Z' {
+                let drive_root_str = format!("{}:\\", drive_letter as char);
+                let drive_path = std::path::PathBuf::from(&drive_root_str);
+                if drive_path.exists() {
+                    if drive_letter == b'C' {
+                        // On C: drive, user personal folders are already targeted in roots;
+                        // add non-system user top-level project folders if present
+                        for top_folder in ["Projects", "work", "dev", "data", "source"] {
+                            let candidate = drive_path.join(top_folder);
+                            if candidate.exists() && !roots.iter().any(|r| candidate.starts_with(r)) {
+                                roots.push(candidate);
+                            }
+                        }
+                    } else {
+                        // For non-OS drives (A:\, B:\, D:\, etc. which contain personal projects, classes, media),
+                        // add the drive root so folders like "A:\Master class\Semester 4" are indexed!
+                        if !roots.iter().any(|r| drive_path.starts_with(r)) {
+                            roots.push(drive_path);
+                        }
+                    }
+                }
+            }
+        }
+
         for root in roots {
             if !root.exists() {
                 continue;

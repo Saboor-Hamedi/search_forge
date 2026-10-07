@@ -1,6 +1,52 @@
 use egui::{Color32, Frame, Margin, Pos2, Rect, Rounding, Stroke, Ui, Vec2};
 use crate::utils::config::AppConfig;
 
+/// Modern iOS/macOS-style pill toggle switch with smooth animated visual states
+pub fn render_toggle_switch(ui: &mut Ui, on: &mut bool) -> bool {
+    let desired_size = Vec2::new(34.0, 18.0);
+    let (rect, mut response) = ui.allocate_exact_size(desired_size, egui::Sense::click());
+    response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+
+    let changed = if response.clicked() {
+        *on = !*on;
+        true
+    } else {
+        false
+    };
+
+    let bg_color = if *on {
+        Color32::from_rgb(255, 230, 0) // SearchForge signature yellow
+    } else if response.hovered() {
+        Color32::from_rgb(48, 52, 66)
+    } else {
+        Color32::from_rgb(34, 38, 48)
+    };
+
+    // Draw pill track
+    let radius = rect.height() / 2.0;
+    ui.painter().rect_filled(rect, Rounding::same(radius), bg_color);
+
+    // Draw switch knob
+    let knob_radius = radius - 2.0;
+    let knob_center_x = if *on {
+        rect.max.x - radius
+    } else {
+        rect.min.x + radius
+    };
+    let knob_color = if *on {
+        Color32::BLACK
+    } else {
+        Color32::from_rgb(200, 205, 220)
+    };
+    ui.painter().circle_filled(
+        Pos2::new(knob_center_x, rect.center().y),
+        knob_radius,
+        knob_color,
+    );
+
+    changed
+}
+
 pub fn render_settings_menu(
     ui: &mut Ui,
     open: &mut bool,
@@ -11,8 +57,8 @@ pub fn render_settings_menu(
         return;
     }
 
-    let menu_width = 240.0;
-    let menu_height = 148.0;
+    let menu_width = 280.0;
+    let menu_height = 186.0;
 
     // Position pop-up menu sleekly above the button on the right
     let menu_pos = Pos2::new(
@@ -43,7 +89,7 @@ pub fn render_settings_menu(
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("⚙ Preferences")
-                                .size(13.0)
+                                .size(13.5)
                                 .strong()
                                 .color(Color32::WHITE),
                         );
@@ -51,7 +97,7 @@ pub fn render_settings_menu(
                             let close_btn = ui.add(
                                 egui::Button::new(
                                     egui::RichText::new("×")
-                                        .size(14.0)
+                                        .size(15.0)
                                         .color(Color32::from_rgb(140, 145, 160)),
                                 )
                                 .fill(Color32::TRANSPARENT)
@@ -68,29 +114,53 @@ pub fn render_settings_menu(
                     ui.separator();
                     ui.add_space(8.0);
 
-                    // Toggle 1: Open on Startup
-                    let mut autostart = config.autostart;
-                    if ui
-                        .checkbox(&mut autostart, egui::RichText::new("Launch on Windows startup").size(12.0).color(Color32::from_rgb(220, 225, 235)))
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text("Automatically start SearchForge minimized in background when logging in")
-                        .changed()
-                    {
-                        config.set_autostart(autostart);
-                    }
+                    // Unified Primary Toggle: Spotlight Mode (Start on Boot + Hide to Tray)
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new("Spotlight Mode")
+                                    .size(12.5)
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            );
+                            ui.label(
+                                egui::RichText::new("Open on startup & hide in tray")
+                                    .size(11.0)
+                                    .color(Color32::from_rgb(130, 135, 150)),
+                            );
+                        });
 
-                    ui.add_space(6.0);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let mut spotlight_enabled = config.spotlight_mode;
+                            if render_toggle_switch(ui, &mut spotlight_enabled) {
+                                config.set_spotlight_mode(spotlight_enabled);
+                            }
+                        });
+                    });
 
-                    // Toggle 2: Spotlight Hide instead of Close
-                    let mut hide_on_close = config.hide_on_close;
-                    if ui
-                        .checkbox(&mut hide_on_close, egui::RichText::new("Spotlight Mode (Hide on close)").size(12.0).color(Color32::from_rgb(220, 225, 235)))
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text("Hides window into background on Close/Ctrl+K so hotkeys summon instantly")
-                        .changed()
-                    {
-                        config.set_hide_on_close(hide_on_close);
-                    }
+                    ui.add_space(10.0);
+
+                    // Shortcut prompt info
+                    Frame::none()
+                        .fill(Color32::from_rgb(15, 16, 21))
+                        .stroke(Stroke::new(1.0, Color32::from_rgb(32, 36, 46)))
+                        .rounding(Rounding::same(4.0))
+                        .inner_margin(Margin::symmetric(8.0, 5.0))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("Shortcut:")
+                                        .size(11.0)
+                                        .color(Color32::from_rgb(140, 145, 160)),
+                                );
+                                ui.label(
+                                    egui::RichText::new("Alt + K  /  Ctrl + K")
+                                        .size(11.0)
+                                        .strong()
+                                        .color(Color32::from_rgb(255, 230, 0)),
+                                );
+                            });
+                        });
 
                     ui.add_space(10.0);
 
@@ -99,13 +169,13 @@ pub fn render_settings_menu(
                         let quit_btn = ui.add(
                             egui::Button::new(
                                 egui::RichText::new("Quit SearchForge")
-                                    .size(11.0)
+                                    .size(11.5)
                                     .color(Color32::from_rgb(240, 110, 110)),
                             )
                             .fill(Color32::from_rgb(34, 22, 24))
                             .stroke(Stroke::new(1.0, Color32::from_rgb(60, 32, 36)))
                             .rounding(Rounding::same(4.0))
-                            .min_size(Vec2::new(110.0, 22.0)),
+                            .min_size(Vec2::new(110.0, 24.0)),
                         )
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .on_hover_text("Completely exit and close SearchForge process");

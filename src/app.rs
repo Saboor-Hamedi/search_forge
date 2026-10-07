@@ -78,9 +78,17 @@ impl App for SearchForgeApp {
         // Poll background updater events on each frame
         self.updater.poll_updates();
 
-        // Global Spotlight close/hide: Ctrl + K closes or hides the app
-        let ctrl_k_pressed = ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::K) || i.consume_key(egui::Modifiers::CTRL, egui::Key::K));
-        if ctrl_k_pressed {
+        // Global Spotlight shortcuts: Alt + K opens/focuses, Ctrl + K closes or hides
+        let alt_k_pressed = ctx.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::K));
+        let ctrl_k_pressed = ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::COMMAND, egui::Key::K)
+                || i.consume_key(egui::Modifiers::CTRL, egui::Key::K)
+        });
+
+        if alt_k_pressed {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        } else if ctrl_k_pressed {
             if self.config.hide_on_close {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             } else {
