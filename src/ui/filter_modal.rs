@@ -8,7 +8,6 @@ pub fn render_filter_modal(ctx: &Context, open: &mut bool, ignored_patterns: &mu
     let draft_id = Id::new("new_ignored_pattern_draft");
     let mut draft = ctx.data_mut(|d| d.get_temp::<String>(draft_id).unwrap_or_default());
 
-    let mut should_close = false;
     egui::Window::new("Exclusion Filters")
         .open(open)
         .collapsible(false)
@@ -17,20 +16,66 @@ pub fn render_filter_modal(ctx: &Context, open: &mut bool, ignored_patterns: &mu
         .frame(
             Frame::none()
                 .fill(Color32::from_rgb(20, 22, 28))
-                .stroke(Stroke::new(1.0, Color32::from_rgb(44, 48, 60)))
-                .rounding(Rounding::same(5.0))
+                .shadow(egui::epaint::Shadow {
+                    offset: [0.0, 4.0].into(),
+                    blur: 16.0,
+                    spread: 2.0,
+                    color: Color32::from_black_alpha(160),
+                })
+                .stroke(Stroke::new(1.0, Color32::from_rgb(46, 50, 64)))
+                .rounding(Rounding::same(6.0))
                 .inner_margin(Margin::same(14.0)),
         )
         .show(ctx, |ui| {
             ui.set_width(312.0);
-            ui.label(
-                egui::RichText::new("Paths matching any of these patterns will be skipped:")
-                    .size(11.5)
-                    .color(Color32::from_rgb(140, 145, 160)),
-            );
-            ui.add_space(8.0);
 
-            // Clean, lightweight filter rows with reliable native vector checkboxes
+            // 1. Top Custom Exclusion Input (Exact matching height 28px for input and Add button)
+            let control_height = 28.0;
+            let add_btn_width = 54.0;
+            let spacing = 8.0;
+            let text_width = (ui.available_width() - add_btn_width - spacing).max(180.0);
+
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = spacing;
+
+                let text_edit = egui::TextEdit::singleline(&mut draft)
+                    .hint_text("Enter exclusion pattern...")
+                    .font(egui::FontId::proportional(12.0))
+                    .text_color(Color32::WHITE)
+                    .margin(Margin::symmetric(8.0, 5.0))
+                    .desired_width(text_width)
+                    .min_size(Vec2::new(text_width, control_height));
+
+                let edit_resp = ui.add(text_edit);
+
+                let add_btn = egui::Button::new(
+                    egui::RichText::new("Add")
+                        .size(12.0)
+                        .strong()
+                        .color(Color32::WHITE),
+                )
+                .fill(Color32::from_rgb(38, 42, 54))
+                .stroke(Stroke::new(1.0, Color32::from_rgb(58, 64, 80)))
+                .rounding(Rounding::same(4.0))
+                .min_size(Vec2::new(add_btn_width, control_height));
+
+                let add_resp = ui.add(add_btn);
+
+                let enter_pressed = edit_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (add_resp.clicked() || enter_pressed) && !draft.trim().is_empty() {
+                    let new_pat = draft.trim().to_string();
+                    if !ignored_patterns.contains(&new_pat) {
+                        ignored_patterns.push(new_pat);
+                    }
+                    draft.clear();
+                }
+            });
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(6.0);
+
+            // 2. Clean, lightweight filter rows with native vector checkboxes
             egui::ScrollArea::vertical()
                 .id_source("filter_patterns_scroll")
                 .max_height(180.0)
@@ -43,7 +88,7 @@ pub fn render_filter_modal(ctx: &Context, open: &mut bool, ignored_patterns: &mu
                             egui::Sense::click(),
                         );
 
-                        // Very subtle background change on hover, no heavy card border
+                        // Subtle background change on hover, no heavy card border
                         if row_resp.hovered() {
                             ui.painter().rect_filled(
                                 row_rect,
@@ -52,14 +97,14 @@ pub fn render_filter_modal(ctx: &Context, open: &mut bool, ignored_patterns: &mu
                             );
                         }
 
-                        // Native vector checkbox (Always checked for active patterns; clicking unchecks/removes)
+                        // Native vector checkbox
                         let box_size = 14.0;
                         let box_rect = Rect::from_min_size(
                             Pos2::new(row_rect.min.x + 6.0, row_rect.center().y - (box_size / 2.0)),
                             Vec2::new(box_size, box_size),
                         );
 
-                        // Subtle yellow accent for active checked state
+                        // Yellow accent for active checked state
                         ui.painter().rect_filled(
                             box_rect,
                             Rounding::same(3.0),
@@ -71,7 +116,7 @@ pub fn render_filter_modal(ctx: &Context, open: &mut bool, ignored_patterns: &mu
                             Stroke::new(1.0, Color32::from_rgb(200, 180, 0)),
                         );
 
-                        // Crisp checkmark symbol (dark black tick mark)
+                        // Crisp checkmark symbol
                         let check_stroke = Stroke::new(1.8, Color32::BLACK);
                         let p1 = Pos2::new(box_rect.min.x + 3.0, box_rect.min.y + 7.0);
                         let p2 = Pos2::new(box_rect.min.x + 5.5, box_rect.min.y + 10.5);
@@ -89,8 +134,8 @@ pub fn render_filter_modal(ctx: &Context, open: &mut bool, ignored_patterns: &mu
                             Color32::from_rgb(220, 225, 235),
                         );
 
-                        // Clicking row toggles pattern (unchecks and removes from active filters)
-                        if row_resp.on_hover_text("Click to disable/remove filter").clicked() {
+                        // Clicking row toggles pattern
+                        if row_resp.on_hover_text("Click to remove exclusion filter").clicked() {
                             remove_index = Some(i);
                         }
                     }
@@ -101,40 +146,8 @@ pub fn render_filter_modal(ctx: &Context, open: &mut bool, ignored_patterns: &mu
                 });
 
             ui.add_space(10.0);
-            ui.separator();
-            ui.add_space(8.0);
 
-            // Add custom pattern input row
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut draft)
-                        .hint_text("Enter custom pattern...")
-                        .desired_width(240.0),
-                );
-
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("Add")
-                                .size(11.5)
-                                .color(Color32::WHITE),
-                        )
-                        .fill(Color32::from_rgb(38, 42, 54))
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(55, 60, 75)))
-                        .rounding(Rounding::same(4.0))
-                        .min_size(Vec2::new(50.0, 24.0)),
-                    )
-                    .clicked()
-                    && !draft.trim().is_empty()
-                {
-                    ignored_patterns.push(draft.trim().to_string());
-                    draft.clear();
-                }
-            });
-
-            ui.add_space(12.0);
-
-            // Bottom action row: Reset Defaults on left, Done on right
+            // 3. Bottom secondary action: Reset Defaults only (Done button removed)
             ui.horizontal(|ui| {
                 if ui
                     .add(
@@ -145,37 +158,15 @@ pub fn render_filter_modal(ctx: &Context, open: &mut bool, ignored_patterns: &mu
                         )
                         .fill(Color32::from_rgb(30, 32, 40))
                         .stroke(Stroke::new(1.0, Color32::from_rgb(45, 48, 60)))
-                        .rounding(Rounding::same(4.0)),
+                        .rounding(Rounding::same(4.0))
+                        .min_size(Vec2::new(96.0, 24.0)),
                     )
                     .clicked()
                 {
                     *ignored_patterns = crate::indexer::filters::default_ignored_patterns();
                 }
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new("Done")
-                                    .size(11.5)
-                                    .strong()
-                                    .color(Color32::BLACK),
-                            )
-                            .fill(Color32::from_rgb(255, 230, 0))
-                            .stroke(Stroke::NONE)
-                            .rounding(Rounding::same(4.0))
-                            .min_size(Vec2::new(60.0, 24.0)),
-                        )
-                        .clicked()
-                    {
-                        should_close = true;
-                    }
-                });
             });
         });
 
-    if should_close {
-        *open = false;
-    }
     ctx.data_mut(|d| d.insert_temp(draft_id, draft));
 }

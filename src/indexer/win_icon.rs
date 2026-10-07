@@ -236,9 +236,47 @@ mod ffi {
 }
 
 pub fn extract_icon(path: &Path) -> Option<(u32, u32, Vec<u8>)> {
+    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+        let ext_lower = ext.to_ascii_lowercase();
+        if ext_lower == "png" || ext_lower == "ico" || ext_lower == "jpg" || ext_lower == "jpeg" {
+            if let Ok(img) = image::open(path) {
+                let rgba_img = img.to_rgba8();
+                let (w, h) = rgba_img.dimensions();
+                return Some((w, h, rgba_img.into_raw()));
+            }
+        }
+    }
+
     #[cfg(target_os = "windows")]
     {
-        ffi::extract_icon_rgba(path)
+        if let Some(icon) = ffi::extract_icon_rgba(path) {
+            return Some(icon);
+        }
+
+        // Fallback for execution alias reparse points (e.g. wt.exe, notepad.exe)
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let lower = file_name.to_ascii_lowercase();
+        let package_prefix = match lower.as_str() {
+            "wt.exe" => Some("Microsoft.WindowsTerminal"),
+            "notepad.exe" => Some("Microsoft.WindowsNotepad"),
+            "snippingtool.exe" => Some("Microsoft.ScreenSketch"),
+            "mspaint.exe" | "pbrush.exe" => Some("Microsoft.Paint"),
+            "store.exe" | "microsoftstore.exe" => Some("Microsoft.WindowsStore"),
+            "ms-teams.exe" => Some("MicrosoftTeams"),
+            _ => None,
+        };
+
+        if let Some(prefix) = package_prefix {
+            if let Some(logo_path) = crate::indexer::app_scanner::resolve_app_alias_logo(prefix) {
+                if let Ok(img) = image::open(&logo_path) {
+                    let rgba_img = img.to_rgba8();
+                    let (w, h) = rgba_img.dimensions();
+                    return Some((w, h, rgba_img.into_raw()));
+                }
+            }
+        }
+
+        None
     }
     #[cfg(not(target_os = "windows"))]
     {

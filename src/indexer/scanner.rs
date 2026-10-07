@@ -241,12 +241,20 @@ pub fn start_background_scan(
         // --- PHASE 2: User Environment & Workspace Filesystem Discovery ---
         let mut roots = Vec::new();
 
-        // 1. Target current user's home directory (covers Documents, Downloads, Desktop, etc.)
+        // Target user's primary document, download, desktop, and project folders
         if let Some(home) = dirs::home_dir() {
-            roots.push(home);
+            let user_subfolders = [
+                "Desktop", "Documents", "Downloads", "Pictures", "Videos", "Music", "Projects", "source", "repos"
+            ];
+            for sub in &user_subfolders {
+                let p = home.join(sub);
+                if p.exists() {
+                    roots.push(p);
+                }
+            }
         }
 
-        // 2. Current working directory (if outside home, e.g. external project drive)
+        // Current working directory (e.g. active workspace or project)
         if let Ok(cwd) = std::env::current_dir() {
             if !roots.iter().any(|r| cwd.starts_with(r)) {
                 roots.push(cwd);
@@ -263,6 +271,12 @@ pub fn start_background_scan(
                 .filter_entry(|entry| {
                     if entry.depth() == 0 {
                         return true;
+                    }
+                    if let Some(name) = entry.file_name().to_str() {
+                        // Skip hidden dot-directory subtrees (e.g. .git, .vscode, .idea)
+                        if name.starts_with('.') && name != ".env" {
+                            return false;
+                        }
                     }
                     let path_str = entry.path().to_string_lossy();
                     !should_ignore(&path_str, &ignored)

@@ -177,7 +177,7 @@ pub fn render_results_list(
                         let truncated_name = truncate_string(app_name, 34);
                         ui.label(
                             egui::RichText::new(truncated_name)
-                                .size(13.5)
+                                .size(15.5)
                                 .strong()
                                 .color(if is_selected {
                                     Color32::WHITE
@@ -195,30 +195,13 @@ pub fn render_results_list(
                         let truncated_sub = truncate_string(&subtitle, 36);
                         ui.label(
                             egui::RichText::new(truncated_sub)
-                                .size(11.0)
+                                .size(12.5)
                                 .color(if is_selected {
-                                    Color32::from_rgb(150, 155, 175)
+                                    Color32::from_rgb(155, 160, 180)
                                 } else {
-                                    Color32::from_rgb(125, 130, 145)
+                                    Color32::from_rgb(130, 135, 150)
                                 }),
                         );
-                    });
-
-                    // Right side APP pill
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        Frame::none()
-                            .fill(Color32::from_rgb(18, 35, 50))
-                            .stroke(Stroke::new(1.0, Color32::from_rgb(25, 65, 95)))
-                            .rounding(Rounding::same(3.0))
-                            .inner_margin(Margin::symmetric(6.0, 2.0))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("APP")
-                                        .size(10.5)
-                                        .strong()
-                                        .color(Color32::from_rgb(0, 205, 255)),
-                                );
-                            });
                     });
                 } else {
                     // --- ORDINARY FILE / FOLDER PRESENTATION ---
@@ -231,7 +214,7 @@ pub fn render_results_list(
                         .show(ui, |ui| {
                             ui.label(
                                 egui::RichText::new(badge_text)
-                                    .size(10.5)
+                                    .size(11.5)
                                     .strong()
                                     .color(badge_color),
                             );
@@ -244,7 +227,7 @@ pub fn render_results_list(
                         let truncated_name = truncate_string(&record.name, 34);
                         ui.label(
                             egui::RichText::new(truncated_name)
-                                .size(13.0)
+                                .size(15.0)
                                 .strong()
                                 .color(if is_selected {
                                     Color32::WHITE
@@ -260,9 +243,9 @@ pub fn render_results_list(
                         let truncated_parent = truncate_string(parent, 36);
                         ui.label(
                             egui::RichText::new(truncated_parent)
-                                .size(11.0)
+                                .size(12.5)
                                 .color(if is_selected {
-                                    Color32::from_rgb(150, 155, 175)
+                                    Color32::from_rgb(155, 160, 180)
                                 } else {
                                     Color32::from_rgb(130, 135, 150)
                                 }),
@@ -284,7 +267,7 @@ pub fn render_results_list(
                             .show(ui, |ui| {
                                 ui.label(
                                     egui::RichText::new(size_text)
-                                        .size(10.5)
+                                        .size(11.5)
                                         .color(Color32::from_rgb(140, 145, 160)),
                                 );
                             });
@@ -293,7 +276,8 @@ pub fn render_results_list(
             });
         });
 
-        let interactive = response.response.interact(egui::Sense::click());
+        let interactive = response.response.interact(egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
         let is_now_hovered = interactive.hovered();
         ui.data_mut(|d| d.insert_temp(row_id, is_now_hovered));
 

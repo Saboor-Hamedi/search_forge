@@ -108,6 +108,7 @@ pub fn render_preview_panel(
 
             if ui
                 .add(open_btn)
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text("Open with default system program")
                 .clicked()
             {
@@ -207,135 +208,141 @@ fn render_application_profile(ui: &mut Ui, file: &FileRecord, icon_cache: &IconC
     let launch_target = file.launch_target();
     let icon_key = file.icon_cache_key();
 
-    Frame::none()
-        .fill(Color32::from_rgb(20, 22, 28))
-        .rounding(Rounding::same(6.0))
-        .inner_margin(Margin::symmetric(24.0, 28.0))
-        .show(ui, |ui| {
-            ui.vertical(|ui| {
-                // 1. Application Icon (Section 6, 8, 9)
-                let texture_opt = icon_cache.get_or_load_texture(ui.ctx(), &icon_key, Some(&file.path));
-                if let Some(texture) = texture_opt {
-                    ui.add(
-                        egui::Image::new(&texture)
-                            .fit_to_exact_size(Vec2::new(56.0, 56.0))
-                            .rounding(Rounding::same(8.0)),
-                    );
-                } else {
-                    let (icon_rect, _) = ui.allocate_exact_size(Vec2::new(56.0, 56.0), egui::Sense::hover());
-                    ui.painter().rect_filled(
-                        icon_rect,
-                        Rounding::same(8.0),
-                        Color32::from_rgb(26, 32, 45),
-                    );
-                    ui.painter().rect_stroke(
-                        icon_rect,
-                        Rounding::same(8.0),
-                        Stroke::new(1.0, Color32::from_rgb(45, 60, 90)),
-                    );
-                    let words: Vec<&str> = app_name.split_whitespace().collect();
-                    let initials = if words.len() >= 2 {
-                        format!(
-                            "{}{}",
-                            words[0].chars().next().unwrap_or('A').to_ascii_uppercase(),
-                            words[1].chars().next().unwrap_or('P').to_ascii_uppercase()
-                        )
-                    } else {
-                        "APP".to_string()
-                    };
-                    ui.painter().text(
-                        icon_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        initials,
-                        egui::FontId::proportional(18.0),
-                        Color32::from_rgb(0, 195, 240),
-                    );
-                }
+    let full_w = ui.available_width();
 
-                ui.add_space(14.0);
+    ui.vertical_centered(|ui| {
+        ui.set_width(full_w);
+        ui.add_space(16.0);
 
-                // 2. Application Name (strongest element)
-                ui.label(
-                    egui::RichText::new(app_name)
-                        .size(19.0)
-                        .strong()
-                        .color(Color32::WHITE),
-                );
+        // 1. Prominent Application Icon (Real high-res or monogram)
+        let texture_opt = icon_cache.get_or_load_texture(ui.ctx(), &icon_key, Some(&file.path));
+        if let Some(texture) = texture_opt {
+            ui.add(
+                egui::Image::new(&texture)
+                    .fit_to_exact_size(Vec2::new(64.0, 64.0))
+                    .rounding(Rounding::same(10.0)),
+            );
+        } else {
+            let (icon_rect, _) = ui.allocate_exact_size(Vec2::new(64.0, 64.0), egui::Sense::hover());
+            ui.painter().rect_filled(
+                icon_rect,
+                Rounding::same(10.0),
+                Color32::from_rgb(26, 32, 45),
+            );
+            ui.painter().rect_stroke(
+                icon_rect,
+                Rounding::same(10.0),
+                Stroke::new(1.0, Color32::from_rgb(45, 60, 90)),
+            );
+            let words: Vec<&str> = app_name.split_whitespace().collect();
+            let initials = if words.len() >= 2 {
+                format!(
+                    "{}{}",
+                    words[0].chars().next().unwrap_or('A').to_ascii_uppercase(),
+                    words[1].chars().next().unwrap_or('P').to_ascii_uppercase()
+                )
+            } else {
+                "APP".to_string()
+            };
+            ui.painter().text(
+                icon_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                initials,
+                egui::FontId::proportional(22.0),
+                Color32::from_rgb(0, 195, 240),
+            );
+        }
 
-                ui.add_space(3.0);
+        ui.add_space(14.0);
 
-                // 3. Publisher / application type
-                let sub_text = if let Some(pub_name) = publisher {
-                    format!("{} · Installed application", pub_name)
-                } else {
-                    "Installed application".to_string()
-                };
-                ui.label(
-                    egui::RichText::new(sub_text)
-                        .size(12.5)
-                        .color(Color32::from_rgb(155, 160, 175)),
-                );
+        // 2. Application Name (strongest element, +2.5px bigger)
+        ui.label(
+            egui::RichText::new(app_name)
+                .size(22.5)
+                .strong()
+                .color(Color32::WHITE),
+        );
 
-                // 4. Version (optional)
-                if let Some(ver) = version {
-                    ui.add_space(2.0);
-                    ui.label(
-                        egui::RichText::new(format!("Version {}", ver))
-                            .size(11.5)
-                            .color(Color32::from_rgb(125, 130, 145)),
-                    );
-                }
+        ui.add_space(4.0);
 
-                ui.add_space(20.0);
+        // 3. Publisher / Application Identity (+2px bigger)
+        let sub_text = if let Some(pub_name) = publisher {
+            format!("{} · Application", pub_name)
+        } else {
+            "Installed Application".to_string()
+        };
+        ui.label(
+            egui::RichText::new(sub_text)
+                .size(14.5)
+                .color(Color32::from_rgb(155, 160, 175)),
+        );
 
-                // 5. Location (secondary)
+        if let Some(ver) = version {
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new(format!("Version {}", ver))
+                    .size(13.0)
+                    .color(Color32::from_rgb(125, 130, 145)),
+            );
+        }
+
+        ui.add_space(22.0);
+
+        // 4. Centered Location & Metadata Details (Centered container adapting to resize)
+        let loc_box_width = (full_w - 48.0).clamp(240.0, 440.0);
+        Frame::none()
+            .fill(Color32::from_rgb(20, 22, 28))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(34, 38, 48)))
+            .rounding(Rounding::same(6.0))
+            .inner_margin(Margin::symmetric(14.0, 10.0))
+            .show(ui, |ui| {
+                ui.set_width(loc_box_width);
                 ui.label(
                     egui::RichText::new("Location")
-                        .size(11.0)
+                        .size(12.5)
                         .strong()
-                        .color(Color32::from_rgb(140, 145, 160)),
+                        .color(Color32::from_rgb(135, 140, 155)),
                 );
-                ui.add_space(3.0);
+                ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(launch_target)
-                        .size(11.5)
-                        .color(Color32::from_rgb(180, 185, 200)),
+                        .size(13.0)
+                        .color(Color32::from_rgb(200, 205, 220)),
                 );
 
                 if let Some(ref meta) = file.app_metadata {
-                    ui.add_space(6.0);
+                    ui.add_space(5.0);
                     ui.label(
                         egui::RichText::new(format!("Source: {}", meta.source))
-                            .size(10.5)
-                            .color(Color32::from_rgb(115, 120, 135)),
+                            .size(11.5)
+                            .color(Color32::from_rgb(120, 125, 140)),
                     );
                 }
-
-                ui.add_space(28.0);
-
-                // 6. Centered Launch Button (clean, prominent, centered)
-                ui.vertical_centered(|ui| {
-                    let launch_btn = egui::Button::new(
-                        egui::RichText::new("Launch  ↗")
-                            .size(13.0)
-                            .strong()
-                            .color(Color32::BLACK),
-                    )
-                    .fill(Color32::from_rgb(255, 230, 0)) // SearchForge signature yellow
-                    .stroke(Stroke::NONE)
-                    .rounding(Rounding::same(16.0))
-                    .min_size(Vec2::new(150.0, 34.0));
-
-                    if ui
-                        .add(launch_btn)
-                        .on_hover_text("Launch application (or press Enter)")
-                        .clicked()
-                    {
-                        let _ = open::that(launch_target);
-                    }
-                });
             });
-        });
+
+        ui.add_space(26.0);
+
+        // 5. Centered Launch Action Button (+2px bigger font)
+        let launch_btn = egui::Button::new(
+            egui::RichText::new("Launch  ↗")
+                .size(15.0)
+                .strong()
+                .color(Color32::BLACK),
+        )
+        .fill(Color32::from_rgb(255, 230, 0)) // Signature SearchForge Yellow
+        .stroke(Stroke::NONE)
+        .rounding(Rounding::same(19.0))
+        .min_size(Vec2::new(170.0, 38.0));
+
+        if ui
+            .add(launch_btn)
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("Launch application (or press Enter)")
+            .clicked()
+        {
+            let _ = open::that(launch_target);
+        }
+    });
 }
 
 fn render_markdown_inline(ui: &mut Ui, text: &str, base_size: f32, base_color: Color32) {

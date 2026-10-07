@@ -356,47 +356,65 @@ fn scan_windows_apps_folder(apps: &mut Vec<DiscoveredApp>) {
                 continue;
             }
 
-            let (display_name, publisher) = match lower.as_str() {
+            let (display_name, publisher, package_prefix) = match lower.as_str() {
                 "wt.exe" => (
                     "Windows Terminal".to_string(),
                     Some("Microsoft Corporation".to_string()),
+                    Some("Microsoft.WindowsTerminal"),
                 ),
                 "notepad.exe" => (
                     "Notepad".to_string(),
                     Some("Microsoft Corporation".to_string()),
+                    Some("Microsoft.WindowsNotepad"),
                 ),
-                "mspaint.exe" | "pbrush.exe" => {
-                    ("Paint".to_string(), Some("Microsoft Corporation".to_string()))
-                }
+                "mspaint.exe" | "pbrush.exe" => (
+                    "Paint".to_string(),
+                    Some("Microsoft Corporation".to_string()),
+                    Some("Microsoft.Paint"),
+                ),
                 "snippingtool.exe" => (
                     "Snipping Tool".to_string(),
                     Some("Microsoft Corporation".to_string()),
+                    Some("Microsoft.ScreenSketch"),
                 ),
                 "ms-teams.exe" => (
                     "Microsoft Teams".to_string(),
                     Some("Microsoft Corporation".to_string()),
+                    Some("MicrosoftTeams"),
                 ),
                 "wsl.exe" => (
                     "Windows Subsystem for Linux".to_string(),
                     Some("Microsoft Corporation".to_string()),
+                    None,
                 ),
-                "ubuntu2404.exe" => ("Ubuntu 24.04".to_string(), Some("Canonical".to_string())),
-                "bash.exe" => ("Bash".to_string(), None),
+                "ubuntu2404.exe" => (
+                    "Ubuntu 24.04".to_string(),
+                    Some("Canonical".to_string()),
+                    Some("CanonicalGroupLimited.Ubuntu24.04LTS"),
+                ),
+                "bash.exe" => ("Bash".to_string(), None, None),
                 "winget.exe" => (
                     "Windows Package Manager".to_string(),
                     Some("Microsoft Corporation".to_string()),
+                    None,
                 ),
                 "microsoftstore.exe" | "store.exe" => (
                     "Microsoft Store".to_string(),
                     Some("Microsoft Corporation".to_string()),
+                    Some("Microsoft.WindowsStore"),
                 ),
                 _ => (
                     clean_app_display_name(file_name),
                     Some("Microsoft Corporation".to_string()),
+                    None,
                 ),
             };
 
             let path_str = path.to_string_lossy().to_string();
+            let icon_path = package_prefix
+                .and_then(resolve_app_alias_logo)
+                .unwrap_or_else(|| path_str.clone());
+
             apps.push(DiscoveredApp {
                 name: display_name.clone(),
                 display_name,
@@ -404,7 +422,7 @@ fn scan_windows_apps_folder(apps: &mut Vec<DiscoveredApp>) {
                 version: None,
                 target_path: path_str.clone(),
                 shortcut_path: None,
-                icon_path: path_str,
+                icon_path,
                 source: "Windows Apps".to_string(),
             });
         }
@@ -793,6 +811,118 @@ fn scan_registry_app_paths(apps: &mut Vec<DiscoveredApp>) {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub fn resolve_app_alias_logo(package_prefix: &str) -> Option<String> {
+    use reg_ffi::*;
+    let subkey_w = to_wide_null(r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages");
+    let mut parent_key: HKEY = std::ptr::null_mut();
+    unsafe {
+        if RegOpenKeyExW(HKEY_CURRENT_USER, subkey_w.as_ptr(), 0, KEY_READ, &mut parent_key) != ERROR_SUCCESS {
+            return None;
+        }
+
+        let mut index: DWORD = 0;
+        let mut subkey_name_buf = [0u16; 256];
+        let mut found_logo = None;
+
+        loop {
+            let mut name_len: DWORD = 256;
+            let status = RegEnumKeyExW(
+                parent_key,
+                index,
+                subkey_name_buf.as_mut_ptr(),
+                &mut name_len,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            if status != ERROR_SUCCESS {
+                break;
+            }
+            index += 1;
+
+            if let Ok(child_name) = String::from_utf16(&subkey_name_buf[..name_len as usize]) {
+                if child_name.to_ascii_lowercase().starts_with(&package_prefix.to_ascii_lowercase()) {
+                    let child_w = to_wide_null(&child_name);
+                    let mut child_key: HKEY = std::ptr::null_mut();
+                    if RegOpenKeyExW(parent_key, child_w.as_ptr(), 0, KEY_READ, &mut child_key) == ERROR_SUCCESS {
+                        if let Some(root_folder) = query_string_value(child_key, "PackageRootFolder") {
+                            RegCloseKey(child_key);
+                            found_logo = find_best_logo_in_package(&PathBuf::from(root_folder));
+                            break;
+                        }
+                        RegCloseKey(child_key);
+                    }
+                }
+            }
+        }
+        RegCloseKey(parent_key);
+        found_logo
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn resolve_app_alias_logo(_package_prefix: &str) -> Option<String> {
+    None
+}
+
+pub fn find_best_logo_in_package(root_folder: &Path) -> Option<String> {
+    let candidate_dirs = [
+        root_folder.join("Images"),
+        root_folder.join("Assets"),
+        root_folder.to_path_buf(),
+    ];
+
+    let mut best_path: Option<(i32, String)> = None;
+
+    for dir in &candidate_dirs {
+        if !dir.exists() {
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let p = entry.path();
+                if !p.is_file() {
+                    continue;
+                }
+                let name = match p.file_name().and_then(|n| n.to_str()) {
+                    Some(n) => n,
+                    None => continue,
+                };
+                let lower = name.to_ascii_lowercase();
+                if !lower.ends_with(".png") {
+                    continue;
+                }
+                // Skip high-contrast black/white theme logos in favor of standard colorful logos
+                if lower.contains("contrast-black") || lower.contains("contrast-white") {
+                    continue;
+                }
+                if lower.contains("logo") {
+                    let mut score = 10;
+                    if lower.contains("square44") || lower.contains("targetsize-48") {
+                        score += 60;
+                    }
+                    if lower.contains("targetsize-256") || lower.contains("scale-200") {
+                        score += 50;
+                    }
+                    if lower.contains("storelogo") {
+                        score += 40;
+                    }
+                    if lower.contains("square150") {
+                        score += 30;
+                    }
+                    if best_path.as_ref().map_or(true, |(s, _)| score > *s) {
+                        best_path = Some((score, p.to_string_lossy().to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    best_path.map(|(_, p)| p)
+}
+
 /// Deduplicate applications while preserving genuine distinct editions
 fn deduplicate_applications(raw_apps: Vec<DiscoveredApp>) -> Vec<DiscoveredApp> {
     let mut map: HashMap<String, DiscoveredApp> = HashMap::new();
@@ -815,6 +945,10 @@ fn deduplicate_applications(raw_apps: Vec<DiscoveredApp>) -> Vec<DiscoveredApp> 
                 // Prefer shortcut if available, else executable
                 if existing.shortcut_path.is_none() && app.shortcut_path.is_some() {
                     existing.shortcut_path = app.shortcut_path;
+                }
+                // Prefer real logo PNG icon over plain .exe
+                if existing.icon_path.to_ascii_lowercase().ends_with(".exe") && app.icon_path.to_ascii_lowercase().ends_with(".png") {
+                    existing.icon_path = app.icon_path;
                 }
                 // Prefer existing name if shorter/cleaner
                 if app.display_name.len() < existing.display_name.len()
@@ -927,6 +1061,22 @@ mod tests {
 
         let insiders = deduplicated.iter().find(|a| a.display_name == "Visual Studio Code - Insiders").unwrap();
         assert_eq!(insiders.publisher.as_deref(), Some("Microsoft Corporation"));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn test_windows_terminal_package_logo_resolved() {
+        if let Some(logo_path) = resolve_app_alias_logo("Microsoft.WindowsTerminal") {
+            assert!(std::path::Path::new(&logo_path).exists());
+            assert!(logo_path.to_ascii_lowercase().ends_with(".png"));
+
+            let icon_res = crate::indexer::win_icon::extract_icon(std::path::Path::new(&logo_path));
+            assert!(icon_res.is_some());
+            let (w, h, rgba) = icon_res.unwrap();
+            assert!(w > 0);
+            assert!(h > 0);
+            assert_eq!(rgba.len(), (w * h * 4) as usize);
+        }
     }
 }
 

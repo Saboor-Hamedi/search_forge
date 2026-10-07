@@ -9,28 +9,28 @@ pub fn render_footer(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
 
-        // Left side: Sleek subtle stats indicator
-        let status_color = Color32::from_rgb(110, 115, 130);
+        // Left side: Clean status line
+        let status_color = Color32::from_rgb(115, 120, 138);
         ui.label(
             egui::RichText::new(format!("SearchForge v{}", CURRENT_VERSION))
-                .size(11.0)
+                .size(12.0)
                 .color(status_color),
         );
 
         ui.label(
-            egui::RichText::new("•")
-                .size(10.0)
-                .color(Color32::from_rgb(50, 55, 68)),
+            egui::RichText::new("·")
+                .size(12.0)
+                .color(Color32::from_rgb(70, 75, 90)),
         );
 
         let files_msg = if indexed_count > 0 {
             format!("{} items indexed", indexed_count)
         } else {
-            "Scanning in background...".to_string()
+            "Indexing workspace...".to_string()
         };
         ui.label(
             egui::RichText::new(files_msg)
-                .size(11.0)
+                .size(12.0)
                 .color(status_color),
         );
 
@@ -38,17 +38,34 @@ pub fn render_footer(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             match updater.state() {
                 UpdateState::Idle => {
+                    let btn_id = ui.make_persistent_id("update_idle_btn");
+                    let was_hovered = ui.data(|d| d.get_temp::<bool>(btn_id).unwrap_or(false));
+                    let bg_fill = if was_hovered {
+                        Color32::from_rgb(26, 28, 36)
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    let text_color = if was_hovered {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_rgb(160, 165, 185)
+                    };
+
                     let check_btn = ui.add(
                         egui::Button::new(
                             egui::RichText::new("Check for Updates")
-                                .size(11.0)
-                                .color(Color32::from_rgb(170, 175, 195)),
+                                .size(11.5)
+                                .color(text_color),
                         )
-                        .fill(Color32::from_rgb(26, 28, 36))
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(45, 48, 62)))
+                        .fill(bg_fill)
+                        .stroke(Stroke::NONE) // Flat
                         .rounding(Rounding::same(4.0))
                         .min_size(Vec2::new(110.0, 22.0)),
-                    );
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+
+                    ui.data_mut(|d| d.insert_temp(btn_id, check_btn.hovered()));
+
                     if check_btn.clicked() {
                         updater.check_for_updates();
                     }
@@ -59,22 +76,34 @@ pub fn render_footer(
                     );
                     ui.label(
                         egui::RichText::new("Checking...")
-                            .size(11.0)
+                            .size(11.5)
                             .color(Color32::from_rgb(170, 175, 195)),
                     );
                 }
                 UpdateState::UpToDate => {
+                    let btn_id = ui.make_persistent_id("update_uptodate_btn");
+                    let was_hovered = ui.data(|d| d.get_temp::<bool>(btn_id).unwrap_or(false));
+                    let bg_fill = if was_hovered {
+                        Color32::from_rgb(24, 30, 26)
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+
                     let btn = ui.add(
                         egui::Button::new(
                             egui::RichText::new("Up to Date")
-                                .size(11.0)
+                                .size(11.5)
                                 .color(Color32::from_rgb(120, 200, 140)),
                         )
-                        .fill(Color32::from_rgb(24, 30, 26))
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(38, 55, 42)))
+                        .fill(bg_fill)
+                        .stroke(Stroke::NONE) // Flat
                         .rounding(Rounding::same(4.0))
                         .min_size(Vec2::new(85.0, 22.0)),
-                    );
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+
+                    ui.data_mut(|d| d.insert_temp(btn_id, btn.hovered()));
+
                     if btn.clicked() {
                         updater.check_for_updates();
                     }
@@ -91,7 +120,8 @@ pub fn render_footer(
                         .stroke(Stroke::NONE)
                         .rounding(Rounding::same(4.0))
                         .min_size(Vec2::new(125.0, 22.0)),
-                    );
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
                     if download_btn.clicked() {
                         updater.start_download();
                     }
@@ -154,7 +184,8 @@ pub fn render_footer(
                         .stroke(Stroke::NONE)
                         .rounding(Rounding::same(4.0))
                         .min_size(Vec2::new(155.0, 22.0)),
-                    );
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
                     if restart_btn.clicked() {
                         updater.restart_and_install();
                     }
@@ -170,7 +201,8 @@ pub fn render_footer(
                         .stroke(Stroke::new(1.0, Color32::from_rgb(70, 36, 40)))
                         .rounding(Rounding::same(4.0))
                         .min_size(Vec2::new(95.0, 22.0)),
-                    );
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
                     if err_btn.on_hover_text(err).clicked() {
                         updater.check_for_updates();
                     }

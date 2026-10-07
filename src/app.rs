@@ -30,7 +30,7 @@ impl SearchForgeApp {
 
         // Apply sleek Neobrutalist / VS Code palette style visuals
         let mut visuals = egui::Visuals::dark();
-        visuals.panel_fill = Color32::from_rgb(18, 19, 23);
+        visuals.panel_fill = Color32::TRANSPARENT;
         visuals.window_fill = Color32::from_rgb(18, 19, 23);
         visuals.extreme_bg_color = Color32::from_rgb(14, 15, 18);
         visuals.selection.bg_fill = Color32::from_rgb(255, 230, 0);
@@ -42,7 +42,7 @@ impl SearchForgeApp {
         visuals.widgets.hovered.bg_fill = Color32::from_rgb(30, 32, 40);
         visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(50, 54, 68));
         visuals.widgets.active.bg_fill = Color32::from_rgb(255, 230, 0);
-        visuals.window_rounding = Rounding::same(5.0);
+        visuals.window_rounding = Rounding::same(6.0);
         cc.egui_ctx.set_visuals(visuals);
 
         let store = Arc::new(RwLock::new(Vec::new()));
@@ -58,7 +58,7 @@ impl SearchForgeApp {
             selected_index: None,
             open_settings: false,
             ignored_patterns,
-            left_panel_width: 440.0, // Centered by default (half of 880.0)
+            left_panel_width: 280.0, // Sleek compact left panel by default
             pdf_renderer: crate::ui::pdf_renderer::PdfRenderer::new(),
             updater: UpdateManager::new(),
             icon_cache,
@@ -131,105 +131,125 @@ impl App for SearchForgeApp {
 
         filter_modal::render_filter_modal(ctx, &mut self.open_settings, &mut self.ignored_patterns);
 
-        // Top Search Bar (Flush edge-to-edge: matching body with zero gap and no border)
-        egui::TopBottomPanel::top("top_panel")
-            .frame(egui::Frame::none().fill(Color32::from_rgb(18, 19, 23)).inner_margin(egui::Margin::ZERO))
-            .show(ctx, |ui| {
-                search_bar::render_search_bar(ui, &mut self.search_query, &mut self.open_settings, self.results.len());
-            });
-
-        // Sleek Bottom Footer (Status info, file count, and update/download/restart action)
-        let total_indexed = self.store.read().map(|s| s.len()).unwrap_or(0);
-        egui::TopBottomPanel::bottom("bottom_footer")
+        // Unified rounded window container with native 6px rounding and 1px border
+        egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(15, 16, 20))
-                    .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(30, 32, 40))),
+                    .fill(Color32::from_rgb(18, 19, 23))
+                    .stroke(Stroke::new(1.0, Color32::from_rgb(42, 46, 58)))
+                    .rounding(Rounding::same(6.0))
+                    .inner_margin(egui::Margin::ZERO),
             )
             .show(ctx, |ui| {
-                footer::render_footer(ui, &mut self.updater, total_indexed);
-            });
+                let available_total_w = ui.available_width();
 
-        // Main Content Area with Centered Draggable Splitter Knob
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(Color32::from_rgb(18, 19, 23)).inner_margin(egui::Margin::symmetric(10.0, 8.0)))
-            .show(ctx, |ui| {
-                let available_width = ui.available_width();
-                let available_height = ui.available_height();
+                // 1. Top Search Bar (Flush borderless input, cleanly placed right action buttons)
+                search_bar::render_search_bar(ui, &mut self.search_query, &mut self.open_settings, self.results.len());
 
-                // Clamp panel width
-                let min_left = 220.0;
-                let max_left = (available_width - 240.0).max(min_left);
+                // Subtle divider below search bar
+                let divider_y = ui.cursor().top();
+                ui.painter().line_segment(
+                    [Pos2::new(0.0, divider_y), Pos2::new(available_total_w, divider_y)],
+                    Stroke::new(1.0, Color32::from_rgb(30, 33, 42)),
+                );
+
+                // 2. Main Middle Area (Results list + Draggable Knob + Centered Preview)
+                let footer_h = 36.0;
+                let middle_h = (ui.available_height() - footer_h).max(100.0);
+
+                let min_left = 200.0;
+                let max_left = (available_total_w - 240.0).max(min_left);
                 self.left_panel_width = self.left_panel_width.clamp(min_left, max_left);
 
-                ui.horizontal(|ui| {
-                    // Left results list panel (max 5 items)
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(self.left_panel_width, available_height),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            results_list::render_results_list(ui, &self.results, &mut self.selected_index, &self.icon_cache);
-                        },
-                    );
+                ui.allocate_ui_with_layout(
+                    Vec2::new(available_total_w, middle_h),
+                    egui::Layout::left_to_right(egui::Align::Min),
+                    |ui| {
+                        // Left results list panel
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(self.left_panel_width, middle_h),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                ui.set_width(self.left_panel_width);
+                                results_list::render_results_list(ui, &self.results, &mut self.selected_index, &self.icon_cache);
+                            },
+                        );
 
-                    // Neobrutalist Centered Draggable Resize Knob / Separator
-                    let knob_width = 10.0;
-                    let (knob_rect, knob_response) = ui.allocate_exact_size(
-                        Vec2::new(knob_width, available_height),
-                        egui::Sense::drag(),
-                    );
+                        // Neobrutalist Centered Draggable Resize Knob / Separator
+                        let knob_width = 10.0;
+                        let (knob_rect, knob_response) = ui.allocate_exact_size(
+                            Vec2::new(knob_width, middle_h),
+                            egui::Sense::drag(),
+                        );
 
-                    if knob_response.hovered() || knob_response.dragged() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-                    }
+                        if knob_response.hovered() || knob_response.dragged() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                        }
 
-                    if knob_response.dragged() {
-                        self.left_panel_width = (self.left_panel_width + knob_response.drag_delta().x)
-                            .clamp(min_left, max_left);
-                    }
+                        if knob_response.dragged() {
+                            self.left_panel_width = (self.left_panel_width + knob_response.drag_delta().x)
+                                .clamp(min_left, max_left);
+                        }
 
-                    // Sleek divider line
-                    let center_x = knob_rect.center().x;
-                    let line_color = if knob_response.hovered() || knob_response.dragged() {
-                        Color32::from_rgb(100, 140, 240) // Subtle sleek blue on hover/drag
-                    } else {
-                        Color32::from_rgb(38, 41, 52)
-                    };
+                        // Sleek divider line
+                        let center_x = knob_rect.center().x;
+                        let line_color = if knob_response.hovered() || knob_response.dragged() {
+                            Color32::from_rgb(100, 140, 240)
+                        } else {
+                            Color32::from_rgb(34, 38, 48)
+                        };
 
-                    ui.painter().line_segment(
-                        [Pos2::new(center_x, knob_rect.min.y), Pos2::new(center_x, knob_rect.max.y)],
-                        Stroke::new(1.0, line_color),
-                    );
+                        ui.painter().line_segment(
+                            [Pos2::new(center_x, knob_rect.min.y), Pos2::new(center_x, knob_rect.max.y)],
+                            Stroke::new(1.0, line_color),
+                        );
 
-                    // Sleek tactile knob handle
-                    let handle_h = 28.0;
-                    let handle_w = 4.0;
-                    let handle_rect = Rect::from_center_size(
-                        Pos2::new(center_x, knob_rect.center().y),
-                        Vec2::new(handle_w, handle_h),
-                    );
-                    let handle_color = if knob_response.dragged() {
-                        Color32::from_rgb(100, 140, 240)
-                    } else if knob_response.hovered() {
-                        Color32::from_rgb(140, 170, 255)
-                    } else {
-                        Color32::from_rgb(55, 60, 75)
-                    };
-                    ui.painter().rect_filled(handle_rect, Rounding::same(2.0), handle_color);
+                        // Sleek tactile knob handle
+                        let handle_h = 28.0;
+                        let handle_w = 4.0;
+                        let handle_rect = Rect::from_center_size(
+                            Pos2::new(center_x, knob_rect.center().y),
+                            Vec2::new(handle_w, handle_h),
+                        );
+                        let handle_color = if knob_response.dragged() {
+                            Color32::from_rgb(100, 140, 240)
+                        } else if knob_response.hovered() {
+                            Color32::from_rgb(140, 170, 255)
+                        } else {
+                            Color32::from_rgb(52, 56, 70)
+                        };
+                        ui.painter().rect_filled(handle_rect, Rounding::same(2.0), handle_color);
 
-                    // Right preview panel (centered next to knob)
-                    let preview_width = ui.available_width();
-                    self.pdf_renderer.receive_rendered_textures(ctx);
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(preview_width, available_height),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            let selected_file = self.selected_index.and_then(|idx| self.results.get(idx));
-                            preview_panel::render_preview_panel(ui, selected_file, &mut self.pdf_renderer, &self.icon_cache);
-                        },
-                    );
-                });
+                        // Right preview panel (dynamically centered)
+                        let preview_width = ui.available_width();
+                        self.pdf_renderer.receive_rendered_textures(ctx);
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(preview_width, middle_h),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                ui.set_width(preview_width);
+                                let selected_file = self.selected_index.and_then(|idx| self.results.get(idx));
+                                preview_panel::render_preview_panel(ui, selected_file, &mut self.pdf_renderer, &self.icon_cache);
+                            },
+                        );
+                    },
+                );
+
+                // Divider above footer
+                let footer_y = ui.cursor().top();
+                ui.painter().line_segment(
+                    [Pos2::new(0.0, footer_y), Pos2::new(available_total_w, footer_y)],
+                    Stroke::new(1.0, Color32::from_rgb(26, 28, 36)),
+                );
+
+                // 3. Subtle Bottom Footer
+                let total_indexed = self.store.read().map(|s| s.len()).unwrap_or(0);
+                egui::Frame::none()
+                    .fill(Color32::from_rgb(16, 17, 21))
+                    .inner_margin(egui::Margin::symmetric(14.0, 7.0))
+                    .show(ui, |ui| {
+                        footer::render_footer(ui, &mut self.updater, total_indexed);
+                    });
             });
     }
 }
