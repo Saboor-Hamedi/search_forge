@@ -67,8 +67,10 @@ impl Database {
         let mut stmt = self.conn.prepare(sql)?;
         let rows = stmt.query_map(params![pattern, limit as i64], |row| {
             let is_dir: bool = row.get::<_, i32>(3)? != 0;
+            let name: String = row.get(0)?;
+            let norm_name = crate::utils::unicode::normalize_for_search(&name);
             Ok(FileRecord {
-                name: row.get(0)?,
+                name,
                 path: row.get(1)?,
                 size: row.get::<_, i64>(2)? as u64,
                 is_dir,
@@ -78,6 +80,7 @@ impl Database {
                     SearchResultType::File
                 },
                 app_metadata: None,
+                norm_name,
             })
         })?;
 
@@ -97,8 +100,10 @@ impl Database {
         )?;
         let rows = stmt.query_map(params![limit as i64], |row| {
             let is_dir: bool = row.get::<_, i32>(3)? != 0;
+            let name: String = row.get(0)?;
+            let norm_name = crate::utils::unicode::normalize_for_search(&name);
             Ok(FileRecord {
-                name: row.get(0)?,
+                name,
                 path: row.get(1)?,
                 size: row.get::<_, i64>(2)? as u64,
                 is_dir,
@@ -108,6 +113,7 @@ impl Database {
                     SearchResultType::File
                 },
                 app_metadata: None,
+                norm_name,
             })
         })?;
 
@@ -134,6 +140,7 @@ mod tests {
                 is_dir: false,
                 item_type: SearchResultType::File,
                 app_metadata: None,
+                norm_name: "invoice_99.pdf".to_string(),
             },
             FileRecord {
                 name: "notes.md".to_string(),
@@ -142,6 +149,7 @@ mod tests {
                 is_dir: false,
                 item_type: SearchResultType::File,
                 app_metadata: None,
+                norm_name: "notes.md".to_string(),
             },
             FileRecord {
                 name: "code".to_string(),
@@ -150,6 +158,7 @@ mod tests {
                 is_dir: true,
                 item_type: SearchResultType::Folder,
                 app_metadata: None,
+                norm_name: "code".to_string(),
             },
         ];
 

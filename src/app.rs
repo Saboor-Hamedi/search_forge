@@ -23,6 +23,10 @@ pub struct SearchForgeApp {
     initial_apps_loaded: bool,
     config: crate::utils::config::AppConfig,
     open_preferences: bool,
+    tray_manager: crate::utils::tray_hotkey::TrayHotkeyManager,
+    is_window_visible: bool,
+    keyboard_navigated: bool,
+    preview_cache: crate::ui::preview_panel::PreviewCache,
 }
 
 impl SearchForgeApp {
@@ -47,28 +51,104 @@ impl SearchForgeApp {
         visuals.window_rounding = Rounding::same(6.0);
         cc.egui_ctx.set_visuals(visuals);
 
-        let store = Arc::new(RwLock::new(Vec::new()));
-        let ignored_patterns = default_ignored_patterns();
         let icon_cache = IconCache::new();
+        icon_cache.set_context(cc.egui_ctx.clone());
+
+        // Pre-load top installed applications synchronously so they appear instantly on frame 0
+        let discovered_apps = crate::indexer::app_scanner::discover_installed_applications();
+        let mut app_records = Vec::with_capacity(discovered_apps.len());
+        for app in &discovered_apps {
+            let norm_name = crate::utils::unicode::normalize_for_search(&app.display_name);
+            let record = FileRecord {
+                name: app.name.clone(),
+                path: app.target_path.clone(),
+                size: 0,
+                is_dir: false,
+                item_type: crate::indexer::app_scanner::SearchResultType::Application,
+                app_metadata: Some(crate::indexer::app_scanner::AppMetadata {
+                    name: app.name.clone(),
+                    display_name: app.display_name.clone(),
+                    publisher: app.publisher.clone(),
+                    version: app.version.clone(),
+                    target_path: app.target_path.clone(),
+                    shortcut_path: app.shortcut_path.clone(),
+                    icon_path: app.icon_path.clone(),
+                    source: app.source.clone(),
+                }),
+                norm_name,
+            };
+            icon_cache.request_icon(&app.icon_path, &app.icon_path);
+            app_records.push(record);
+        }
+
+        // Pre-extract icons for top 10 initial applications synchronously so they appear on frame 0
+        for app in discovered_apps.iter().take(10) {
+            let path_to_extract = if let Some(ref sc) = app.shortcut_path {
+                std::path::Path::new(sc)
+            } else {
+                std::path::Path::new(&app.icon_path)
+            };
+            if let Some((w, h, rgba)) = crate::indexer::win_icon::extract_icon(path_to_extract) {
+                icon_cache.insert_raw_icon(&app.icon_path, w, h, rgba);
+            }
+        }
+
+        let initial_10: Vec<FileRecord> = app_records.iter().take(10).cloned().collect();
+        let initial_selected = if initial_10.is_empty() { None } else { Some(0) };
+
+        let store = Arc::new(RwLock::new(app_records));
+        let ignored_patterns = default_ignored_patterns();
         start_background_scan(ignored_patterns.clone(), store.clone(), icon_cache.clone());
 
         let config = crate::utils::config::AppConfig::load();
+        let tray_manager = crate::utils::tray_hotkey::TrayHotkeyManager::new(cc.egui_ctx.clone());
 
         Self {
             search_query: String::new(),
             last_search_query: String::new(),
             store,
-            results: Vec::new(),
-            selected_index: None,
+            results: initial_10,
+            selected_index: initial_selected,
             open_settings: false,
             ignored_patterns,
             left_panel_width: 280.0, // Sleek compact left panel by default
             pdf_renderer: crate::ui::pdf_renderer::PdfRenderer::new(),
             updater: UpdateManager::new(),
             icon_cache,
-            initial_apps_loaded: false,
+            initial_apps_loaded: true,
             config,
             open_preferences: false,
+            tray_manager,
+            is_window_visible: true,
+            keyboard_navigated: false,
+            preview_cache: crate::ui::preview_panel::PreviewCache::new(),
+        }
+    }
+
+    pub fn show_window(&mut self, ctx: &Context) {
+        self.is_window_visible = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        // Reset focus state so search bar gets focus immediately
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("search_input_initial_focused"), false));
+        ctx.request_repaint();
+
+        #[cfg(target_os = "windows")]
+        if let Some(hwnd) = crate::utils::tray_hotkey::find_searchforge_window() {
+            crate::utils::tray_hotkey::bring_window_to_foreground(hwnd);
+        }
+    }
+
+    pub fn hide_window(&mut self, ctx: &Context) {
+        self.is_window_visible = false;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        ctx.request_repaint();
+
+        #[cfg(target_os = "windows")]
+        unsafe {
+            crate::utils::tray_hotkey::hide_searchforge();
         }
     }
 }
@@ -78,23 +158,26 @@ impl App for SearchForgeApp {
         // Poll background updater events on each frame
         self.updater.poll_updates();
 
-        // Global Spotlight shortcuts: Alt + K opens/focuses, Ctrl + K closes or hides
-        let alt_k_pressed = ctx.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::K));
-        let ctrl_k_pressed = ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::COMMAND, egui::Key::K)
-                || i.consume_key(egui::Modifiers::CTRL, egui::Key::K)
-        });
-
-        if alt_k_pressed {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-        } else if ctrl_k_pressed {
-            if self.config.hide_on_close {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-            } else {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                std::process::exit(0);
+        // Process OS tray and global Alt+K hotkey events
+        while let Some(event) = self.tray_manager.try_recv() {
+            match event {
+                crate::utils::tray_hotkey::TrayEvent::Show => {
+                    self.show_window(ctx);
+                }
+                crate::utils::tray_hotkey::TrayEvent::Hide => {
+                    self.hide_window(ctx);
+                }
+                crate::utils::tray_hotkey::TrayEvent::Quit => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    std::process::exit(0);
+                }
             }
+        }
+
+        // In-app Alt + K shortcut: toggles/hides window to tray
+        let alt_k_pressed = ctx.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::K));
+        if alt_k_pressed {
+            self.hide_window(ctx);
         }
 
         // High-priority Escape key handling: works even when the search bar is focused!
@@ -109,12 +192,8 @@ impl App for SearchForgeApp {
             } else if self.open_settings {
                 self.open_settings = false;
             } else {
-                if self.config.hide_on_close {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                } else {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    std::process::exit(0);
-                }
+                // When search is empty and Esc is pressed, hide to tray!
+                self.hide_window(ctx);
             }
         }
 
@@ -122,10 +201,11 @@ impl App for SearchForgeApp {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
             if !self.results.is_empty() {
                 let next = match self.selected_index {
-                    Some(idx) => (idx + 1).min(self.results.len().min(10) - 1),
+                    Some(idx) => (idx + 1).min(self.results.len().saturating_sub(1)),
                     None => 0,
                 };
                 self.selected_index = Some(next);
+                self.keyboard_navigated = true;
             }
         } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
             if !self.results.is_empty() {
@@ -134,6 +214,7 @@ impl App for SearchForgeApp {
                     None => 0,
                 };
                 self.selected_index = Some(prev);
+                self.keyboard_navigated = true;
             }
         } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
             if let Some(idx) = self.selected_index {
@@ -148,7 +229,8 @@ impl App for SearchForgeApp {
         if query_changed || needs_initial_population {
             if let Ok(store_lock) = self.store.read() {
                 if !store_lock.is_empty() {
-                    self.results = search_records(&store_lock, &self.search_query, 10);
+                    let limit = 10;
+                    self.results = search_records(&store_lock, &self.search_query, limit);
                     if query_changed {
                         self.selected_index = if self.results.is_empty() { None } else { Some(0) };
                     } else if self.selected_index.is_none() && !self.results.is_empty() {
@@ -212,7 +294,14 @@ impl App for SearchForgeApp {
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
                                 ui.set_width(self.left_panel_width);
-                                results_list::render_results_list(ui, &self.results, &mut self.selected_index, &self.icon_cache);
+                                results_list::render_results_list(
+                                    ui,
+                                    &self.results,
+                                    &mut self.selected_index,
+                                    &self.icon_cache,
+                                    self.keyboard_navigated,
+                                );
+                                self.keyboard_navigated = false;
                             },
                         );
 
@@ -270,7 +359,13 @@ impl App for SearchForgeApp {
                             |ui| {
                                 ui.set_width(preview_width);
                                 let selected_file = self.selected_index.and_then(|idx| self.results.get(idx));
-                                preview_panel::render_preview_panel(ui, selected_file, &mut self.pdf_renderer, &self.icon_cache);
+                                preview_panel::render_preview_panel(
+                                    ui,
+                                    selected_file,
+                                    &mut self.pdf_renderer,
+                                    &self.icon_cache,
+                                    &mut self.preview_cache,
+                                );
                             },
                         );
                     },

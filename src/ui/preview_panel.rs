@@ -6,15 +6,342 @@ use egui::{Color32, Frame, Margin, Rounding, Stroke, Ui, Vec2};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::thread;
 
-fn truncate_preview_string(s: &str, max_len: usize) -> String {
-    if s.chars().count() <= max_len {
+const MAX_READ_BYTES: u64 = 256 * 1024; // 256 KB max read guard (prevents freezing on huge files)
+const MAX_PREVIEW_LINES: usize = 300;   // 300 lines max rendered
+const MAX_LINE_CHARS: usize = 300;      // 300 chars max per line (prevents egui font shaping lockups on minified CSS/JSON)
+
+fn truncate_line(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
         s.to_string()
     } else {
-        let mut truncated: String = s.chars().take(max_len.saturating_sub(3)).collect();
-        truncated.push_str("...");
-        truncated
+        let t: String = s.chars().take(max_chars).collect();
+        format!("{}... [truncated]", t)
     }
+}
+
+fn read_bounded_text(path: &str) -> Result<(String, bool), String> {
+    let file = fs::File::open(path).map_err(|e| format!("Cannot open file: {}", e))?;
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let is_truncated = file_len > MAX_READ_BYTES;
+
+    let mut buf = Vec::with_capacity((file_len.min(MAX_READ_BYTES)) as usize);
+    file.take(MAX_READ_BYTES).read_to_end(&mut buf).map_err(|e| format!("Read error: {}", e))?;
+
+    // Check if binary (null bytes in first 1024 bytes)
+    if buf.iter().take(1024).any(|&b| b == 0) {
+        return Err("Binary content".to_string());
+    }
+
+    let text = match String::from_utf8(buf) {
+        Ok(s) => s,
+        Err(e) => {
+            let bytes = e.into_bytes();
+            String::from_utf8_lossy(&bytes).to_string()
+        }
+    };
+    Ok((text, is_truncated))
+}
+
+pub enum CachedPreview {
+    Loading,
+    Text {
+        lines: Vec<String>,
+        total_digits: usize,
+        is_truncated: bool,
+    },
+    Markdown {
+        content: String,
+        is_truncated: bool,
+    },
+    Json {
+        lines: Vec<String>,
+        is_truncated: bool,
+    },
+    Docx {
+        paragraphs: Vec<String>,
+    },
+    Excel {
+        sheet_names: Vec<String>,
+        first_sheet_name: String,
+        rows: Vec<Vec<String>>,
+    },
+    Csv {
+        rows: Vec<Vec<String>>,
+        total_rows: usize,
+    },
+    Directory {
+        entries: Vec<(String, bool, String)>,
+        total_count: usize,
+    },
+    Image {
+        width: usize,
+        height: usize,
+        rgba: Vec<u8>,
+    },
+    BinaryOrError(String),
+}
+
+pub struct PreviewCache {
+    cached_path: String,
+    content: Option<CachedPreview>,
+    current_texture: Option<egui::TextureHandle>,
+    tx: Sender<(String, bool)>,
+    rx: Receiver<(String, CachedPreview)>,
+}
+
+impl Default for PreviewCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PreviewCache {
+    pub fn new() -> Self {
+        let (req_tx, req_rx) = channel::<(String, bool)>();
+        let (res_tx, res_rx) = channel::<(String, CachedPreview)>();
+
+        // Background file reading & parsing thread: guarantees main UI thread NEVER blocks on disk I/O!
+        thread::spawn(move || {
+            while let Ok((path, is_dir)) = req_rx.recv() {
+                let preview = Self::load_entry(&path, is_dir);
+                let _ = res_tx.send((path, preview));
+            }
+        });
+
+        Self {
+            cached_path: String::new(),
+            content: None,
+            current_texture: None,
+            tx: req_tx,
+            rx: res_rx,
+        }
+    }
+
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        while let Ok((path, preview)) = self.rx.try_recv() {
+            if self.cached_path == path {
+                if let CachedPreview::Image { width, height, ref rgba } = preview {
+                    let color_img = egui::ColorImage::from_rgba_unmultiplied([width, height], rgba);
+                    let texture = ctx.load_texture(
+                        &path,
+                        color_img,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    self.current_texture = Some(texture);
+                } else {
+                    self.current_texture = None;
+                }
+                self.content = Some(preview);
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    pub fn get_or_load(&mut self, path: &str, is_dir: bool) -> &CachedPreview {
+        if self.cached_path != path {
+            self.cached_path = path.to_string();
+            self.content = Some(CachedPreview::Loading);
+            self.current_texture = None;
+            let _ = self.tx.send((path.to_string(), is_dir));
+        }
+        self.content.as_ref().unwrap()
+    }
+
+    pub fn current_texture(&self) -> Option<&egui::TextureHandle> {
+        self.current_texture.as_ref()
+    }
+
+    fn load_entry(path: &str, is_dir: bool) -> CachedPreview {
+        if is_dir {
+            return match fs::read_dir(path) {
+                Ok(read_dir) => {
+                    let mut entries = Vec::new();
+                    for entry in read_dir.filter_map(|e| e.ok()).take(200) {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                        let size_str = entry.metadata().map(|m| format_size(m.len())).unwrap_or_default();
+                        entries.push((name, is_dir, size_str));
+                    }
+                    let total_count = entries.len();
+                    CachedPreview::Directory { entries, total_count }
+                }
+                Err(e) => CachedPreview::BinaryOrError(format!("Could not read directory: {}", e)),
+            };
+        }
+
+        let ext = Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        match ext.as_str() {
+            "md" | "markdown" => {
+                match read_bounded_text(path) {
+                    Ok((content, is_truncated)) => CachedPreview::Markdown { content, is_truncated },
+                    Err(e) => CachedPreview::BinaryOrError(e),
+                }
+            }
+            "json" => {
+                match read_bounded_text(path) {
+                    Ok((text, is_truncated)) => {
+                        let lines = if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
+                            let pretty = serde_json::to_string_pretty(&val).unwrap_or_else(|_| text.clone());
+                            pretty.lines()
+                                .take(MAX_PREVIEW_LINES)
+                                .map(|l| truncate_line(l, MAX_LINE_CHARS))
+                                .collect()
+                        } else {
+                            let mut formatted = Vec::new();
+                            let mut indent: usize = 0;
+                            for raw_line in text.lines().take(MAX_PREVIEW_LINES) {
+                                let trimmed = raw_line.trim();
+                                if trimmed.starts_with('}') || trimmed.starts_with(']') {
+                                    indent = indent.saturating_sub(1);
+                                }
+                                let indent_spaces = "  ".repeat(indent.min(10));
+                                let combined = format!("{}{}", indent_spaces, trimmed);
+                                formatted.push(truncate_line(&combined, MAX_LINE_CHARS));
+                                if trimmed.ends_with('{') || trimmed.ends_with('[') {
+                                    indent += 1;
+                                }
+                            }
+                            formatted
+                        };
+                        CachedPreview::Json { lines, is_truncated }
+                    }
+                    Err(e) => CachedPreview::BinaryOrError(e),
+                }
+            }
+            "docx" => {
+                match extract_docx_text(path) {
+                    Some(t) if !t.is_empty() => {
+                        let paragraphs: Vec<String> = t.lines()
+                            .take(MAX_PREVIEW_LINES)
+                            .map(|p| truncate_line(p, MAX_LINE_CHARS))
+                            .filter(|p| !p.trim().is_empty())
+                            .collect();
+                        CachedPreview::Docx { paragraphs }
+                    }
+                    _ => CachedPreview::BinaryOrError("Could not extract readable text from Word document.".to_string()),
+                }
+            }
+            "xlsx" | "xls" | "ods" => {
+                use calamine::{open_workbook_auto, Reader};
+                match open_workbook_auto(path) {
+                    Ok(mut wb) => {
+                        let sheet_names = wb.sheet_names().to_owned();
+                        if sheet_names.is_empty() {
+                            CachedPreview::BinaryOrError("Empty Excel workbook".to_string())
+                        } else {
+                            let first_sheet = sheet_names[0].clone();
+                            let rows: Vec<Vec<String>> = wb.worksheet_range(&first_sheet)
+                                .ok()
+                                .map(|range| {
+                                    range.rows()
+                                        .take(60)
+                                        .map(|row| row.iter().take(15).map(|c| truncate_line(&c.to_string(), 60)).collect())
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            CachedPreview::Excel { sheet_names, first_sheet_name: first_sheet, rows }
+                        }
+                    }
+                    Err(e) => CachedPreview::BinaryOrError(format!("Could not read Excel workbook: {}", e)),
+                }
+            }
+            "csv" | "tsv" => {
+                let is_tsv = ext == "tsv";
+                match read_bounded_text(path) {
+                    Ok((content, _)) => {
+                        let delimiter = if is_tsv { '\t' } else { ',' };
+                        let lines: Vec<&str> = content.lines().collect();
+                        let total_rows = lines.len();
+                        let rows: Vec<Vec<String>> = lines
+                            .into_iter()
+                            .take(60)
+                            .map(|line| {
+                                line.split(delimiter)
+                                    .take(15)
+                                    .map(|cell| truncate_line(cell.trim_matches('"').trim(), 60))
+                                    .collect()
+                            })
+                            .collect();
+                        CachedPreview::Csv { rows, total_rows }
+                    }
+                    Err(e) => CachedPreview::BinaryOrError(e),
+                }
+            }
+            "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" => {
+                match image::io::Reader::open(path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r.with_guessed_format().map_err(|e| e.to_string()))
+                    .and_then(|r| r.decode().map_err(|e| e.to_string()))
+                {
+                    Ok(img) => {
+                        let thumb = img.thumbnail(1000, 1000);
+                        let rgba = thumb.to_rgba8();
+                        let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+                        CachedPreview::Image {
+                            width: w,
+                            height: h,
+                            rgba: rgba.into_raw(),
+                        }
+                    }
+                    Err(e) => CachedPreview::BinaryOrError(format!("Could not decode image: {}", e)),
+                }
+            }
+            "pdf" => {
+                CachedPreview::BinaryOrError(String::new())
+            }
+            _ => {
+                match read_bounded_text(path) {
+                    Ok((text, is_truncated)) => {
+                        let lines: Vec<String> = text.lines()
+                            .take(MAX_PREVIEW_LINES)
+                            .map(|l| truncate_line(l, MAX_LINE_CHARS))
+                            .collect();
+                        let total_digits = format!("{}", lines.len()).len().max(2);
+                        CachedPreview::Text { lines, total_digits, is_truncated }
+                    }
+                    Err(e) => CachedPreview::BinaryOrError(e),
+                }
+            }
+        }
+    }
+}
+
+fn render_truncated_banner(ui: &mut Ui) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("⚡ Large file · Preview limited to first 256 KB")
+                .size(11.0)
+                .color(Color32::from_rgb(180, 160, 80)),
+        );
+    });
+    ui.add_space(4.0);
+}
+
+fn render_binary_or_error(ui: &mut Ui, path: &str, msg: &str) {
+    ui.vertical_centered(|ui| {
+        ui.add_space(20.0);
+        let label_text = if msg.is_empty() {
+            "⚠️ Non-UTF8 or Binary Content"
+        } else {
+            msg
+        };
+        ui.label(egui::RichText::new(label_text).color(Color32::from_rgb(160, 165, 180)));
+        ui.add_space(8.0);
+        if ui
+            .button("↗ Open with External Application")
+            .clicked()
+        {
+            let _ = open::that(path);
+        }
+    });
 }
 
 pub fn render_preview_panel(
@@ -22,7 +349,10 @@ pub fn render_preview_panel(
     selected_file: Option<&FileRecord>,
     pdf_renderer: &mut crate::ui::pdf_renderer::PdfRenderer,
     icon_cache: &IconCache,
+    preview_cache: &mut PreviewCache,
 ) {
+    preview_cache.poll(ui.ctx());
+
     let Some(file) = selected_file else {
         let total_h = ui.available_height();
         let content_approx_h = 90.0;
@@ -52,20 +382,16 @@ pub fn render_preview_panel(
         return;
     };
 
-    // Dedicated First-Class Application Profile UX (Section 8, 9, 24)
+    // Dedicated First-Class Application Profile UX (Section 8, 9, 24) - Software keeps its title & details
     if file.is_app() {
         render_application_profile(ui, file, icon_cache);
         return;
     }
 
-    // Top metadata header for regular files (Clean, quiet, borderless)
+    // Top metadata header for regular files (Badge + Open button, NO redundant titles!)
     let (badge_text, badge_color) = file_badge_info(&file.name, file.is_dir);
-    let ext = Path::new(&file.path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    let is_pdf = ext == "pdf";
+
+    ui.add_space(10.0); // Bring down from top search bar
 
     ui.horizontal(|ui| {
         // Clean typography badge
@@ -81,37 +407,10 @@ pub fn render_preview_panel(
                         .color(badge_color),
                 );
             });
-        ui.add_space(8.0);
-
-        ui.vertical(|ui| {
-            if is_pdf {
-                // When a PDF shows up, remove the title and just keep the path on the header
-                let truncated_path = truncate_preview_string(&file.path, 54);
-                ui.label(
-                    egui::RichText::new(truncated_path)
-                        .size(12.5)
-                        .color(Color32::from_rgb(175, 180, 195)),
-                );
-            } else {
-                let truncated_name = truncate_preview_string(&file.name, 44);
-                ui.label(
-                    egui::RichText::new(truncated_name)
-                        .size(14.0)
-                        .strong()
-                        .color(Color32::WHITE),
-                );
-                let truncated_path = truncate_preview_string(&file.path, 48);
-                ui.label(
-                    egui::RichText::new(truncated_path)
-                        .size(11.0)
-                        .color(Color32::from_rgb(130, 135, 150)),
-                );
-            }
-        });
 
         // Yellow signature "Open" button on the right side of preview header, shifted to the left
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(8.0); // Shifted a little bit to the left away from far right edge
+            ui.add_space(24.0); // Moved to the left away from far right edge
             let open_btn = egui::Button::new(
                 egui::RichText::new("Open ↗")
                     .size(12.0)
@@ -142,46 +441,74 @@ pub fn render_preview_panel(
         .rounding(Rounding::same(6.0))
         .inner_margin(Margin::same(12.0))
         .show(ui, |ui| {
-            if file.is_dir {
-                render_directory_preview(ui, &file.path);
-                return;
-            }
-
             let ext = Path::new(&file.path)
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
                 .to_lowercase();
 
-            match ext.as_str() {
-                "md" | "markdown" => render_markdown_preview(ui, &file.path),
-                "xlsx" | "xls" | "ods" => render_excel_preview(ui, &file.path),
-                "csv" | "tsv" => render_csv_preview(ui, &file.path, ext == "tsv"),
-                "docx" => render_docx_preview(ui, &file.path),
-                "pdf" => render_pdf_preview(ui, &file.path, pdf_renderer),
-                "json" => render_json_preview(ui, &file.path),
-                "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" => {
-                    render_image_preview(ui, &file.path)
+            if ext == "pdf" {
+                render_pdf_preview(ui, &file.path, pdf_renderer);
+                return;
+            }
+
+            let cached = preview_cache.get_or_load(&file.path, file.is_dir);
+            match cached {
+                CachedPreview::Loading => {
+                    ui.add_space(20.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            egui::RichText::new("Loading preview...")
+                                .size(13.0)
+                                .color(Color32::from_rgb(130, 135, 150)),
+                        );
+                    });
                 }
-                _ => render_code_or_text_preview(ui, &file.path),
+                CachedPreview::Directory { entries, total_count } => {
+                    render_directory_preview(ui, entries, *total_count);
+                }
+                CachedPreview::Markdown { content, is_truncated } => {
+                    if *is_truncated {
+                        render_truncated_banner(ui);
+                    }
+                    render_markdown_preview(ui, content);
+                }
+                CachedPreview::Json { lines, is_truncated } => {
+                    if *is_truncated {
+                        render_truncated_banner(ui);
+                    }
+                    render_json_preview(ui, lines);
+                }
+                CachedPreview::Docx { paragraphs } => {
+                    render_docx_preview(ui, paragraphs);
+                }
+                CachedPreview::Excel { sheet_names, first_sheet_name, rows } => {
+                    render_excel_preview(ui, sheet_names, first_sheet_name, rows);
+                }
+                CachedPreview::Csv { rows, total_rows } => {
+                    render_csv_preview(ui, rows, *total_rows);
+                }
+                CachedPreview::Image { .. } => {
+                    if let Some(texture) = preview_cache.current_texture() {
+                        render_image_preview(ui, texture);
+                    }
+                }
+                CachedPreview::Text { lines, total_digits, is_truncated } => {
+                    if *is_truncated {
+                        render_truncated_banner(ui);
+                    }
+                    render_code_or_text_preview(ui, lines, *total_digits);
+                }
+                CachedPreview::BinaryOrError(msg) => {
+                    render_binary_or_error(ui, &file.path, msg);
+                }
             }
         });
 }
 
-fn render_directory_preview(ui: &mut Ui, path: &str) {
-    ui.heading("📁 Directory Contents");
-    ui.add_space(6.0);
-
-    let entries = match fs::read_dir(path) {
-        Ok(read_dir) => read_dir.filter_map(|e| e.ok()).collect::<Vec<_>>(),
-        Err(err) => {
-            ui.label(format!("Could not read folder: {}", err));
-            return;
-        }
-    };
-
+fn render_directory_preview(ui: &mut Ui, entries: &[(String, bool, String)], total_count: usize) {
     ui.label(
-        egui::RichText::new(format!("{} item(s) in folder", entries.len()))
+        egui::RichText::new(format!("{} item(s) in folder", total_count))
             .size(12.0)
             .color(Color32::from_rgb(140, 145, 160)),
     );
@@ -189,21 +516,16 @@ fn render_directory_preview(ui: &mut Ui, path: &str) {
 
     egui::ScrollArea::vertical()
         .id_source("folder_preview_scroll")
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for entry in entries.iter().take(200) {
-                let name = entry.file_name().to_string_lossy().to_string();
-                let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                let (icon, color) = file_badge_info(&name, is_dir);
-                let size_str = entry
-                    .metadata()
-                    .map(|m| format_size(m.len()))
-                    .unwrap_or_default();
+            for (name, is_dir, size_str) in entries {
+                let (icon, color) = file_badge_info(name, *is_dir);
 
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(icon).color(color));
-                    ui.label(egui::RichText::new(&name).color(Color32::from_rgb(220, 225, 235)));
-                    if !is_dir {
+                    ui.label(egui::RichText::new(name).color(Color32::from_rgb(220, 225, 235)));
+                    if !*is_dir {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(size_str)
@@ -231,25 +553,25 @@ fn render_application_profile(ui: &mut Ui, file: &FileRecord, icon_cache: &IconC
         ui.set_width(full_w);
         ui.add_space(16.0);
 
-        // 1. Prominent Application Icon (Real high-res or monogram)
+        // 1. Prominent Application Icon (Sleek container)
         let texture_opt = icon_cache.get_or_load_texture(ui.ctx(), &icon_key, Some(&file.path));
         if let Some(texture) = texture_opt {
             ui.add(
                 egui::Image::new(&texture)
                     .fit_to_exact_size(Vec2::new(64.0, 64.0))
-                    .rounding(Rounding::same(10.0)),
+                    .rounding(Rounding::same(12.0)),
             );
         } else {
             let (icon_rect, _) = ui.allocate_exact_size(Vec2::new(64.0, 64.0), egui::Sense::hover());
             ui.painter().rect_filled(
                 icon_rect,
-                Rounding::same(10.0),
-                Color32::from_rgb(26, 32, 45),
+                Rounding::same(12.0),
+                Color32::from_rgb(25, 29, 40),
             );
             ui.painter().rect_stroke(
                 icon_rect,
-                Rounding::same(10.0),
-                Stroke::new(1.0, Color32::from_rgb(45, 60, 90)),
+                Rounding::same(12.0),
+                Stroke::new(1.0, Color32::from_rgb(46, 56, 78)),
             );
             let words: Vec<&str> = app_name.split_whitespace().collect();
             let initials = if words.len() >= 2 {
@@ -266,83 +588,136 @@ fn render_application_profile(ui: &mut Ui, file: &FileRecord, icon_cache: &IconC
                 egui::Align2::CENTER_CENTER,
                 initials,
                 egui::FontId::proportional(22.0),
-                Color32::from_rgb(0, 195, 240),
+                Color32::from_rgb(0, 205, 250),
             );
         }
 
-        ui.add_space(14.0);
+        ui.add_space(12.0);
 
-        // 2. Application Name (strongest element, +2.5px bigger)
+        // 2. Application Name (Title)
         ui.label(
             egui::RichText::new(app_name)
-                .size(22.5)
+                .size(21.5)
                 .strong()
                 .color(Color32::WHITE),
         );
 
-        ui.add_space(4.0);
+        ui.add_space(5.0);
 
-        // 3. Publisher / Application Identity (+2px bigger)
-        let sub_text = if let Some(pub_name) = publisher {
-            format!("{} · Application", pub_name)
-        } else {
-            "Installed Application".to_string()
-        };
-        ui.label(
-            egui::RichText::new(sub_text)
-                .size(14.5)
-                .color(Color32::from_rgb(155, 160, 175)),
-        );
+        // 3. Sleek Badges and Subtitle row (Label, Publisher, Version)
+        ui.horizontal(|ui| {
+            // APP pill badge
+            Frame::none()
+                .fill(Color32::from_rgb(0, 195, 240).linear_multiply(0.18))
+                .rounding(Rounding::same(4.0))
+                .inner_margin(Margin::symmetric(6.0, 2.0))
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new("APP")
+                            .size(10.5)
+                            .strong()
+                            .color(Color32::from_rgb(0, 195, 240)),
+                    );
+                });
 
-        if let Some(ver) = version {
-            ui.add_space(2.0);
-            ui.label(
-                egui::RichText::new(format!("Version {}", ver))
-                    .size(13.0)
-                    .color(Color32::from_rgb(125, 130, 145)),
-            );
-        }
+            if let Some(pub_name) = publisher {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(pub_name)
+                        .size(12.5)
+                        .color(Color32::from_rgb(165, 170, 185)),
+                );
+            }
 
-        ui.add_space(22.0);
+            if let Some(ver) = version {
+                ui.add_space(4.0);
+                Frame::none()
+                    .fill(Color32::from_rgb(26, 28, 36))
+                    .rounding(Rounding::same(4.0))
+                    .inner_margin(Margin::symmetric(5.0, 2.0))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("v{}", ver))
+                                .size(10.5)
+                                .color(Color32::from_rgb(135, 140, 155)),
+                        );
+                    });
+            }
+        });
 
-        // 4. Centered Location & Metadata Details (Centered container adapting to resize)
+        ui.add_space(18.0);
+
+        // 4. Flat Location Card (No shadow, no stroke, completely flat, sleek dark surface)
         let loc_box_width = (full_w - 48.0).clamp(240.0, 440.0);
         Frame::none()
-            .fill(Color32::from_rgb(20, 22, 28))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(34, 38, 48)))
+            .fill(Color32::from_rgb(22, 24, 31))
+            .stroke(Stroke::NONE)
             .rounding(Rounding::same(6.0))
             .inner_margin(Margin::symmetric(14.0, 10.0))
             .show(ui, |ui| {
                 ui.set_width(loc_box_width);
-                ui.label(
-                    egui::RichText::new("Location")
-                        .size(12.5)
-                        .strong()
-                        .color(Color32::from_rgb(135, 140, 155)),
-                );
+
+                // Header with LOCATION label and Copy button
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("LOCATION")
+                            .size(10.5)
+                            .strong()
+                            .color(Color32::from_rgb(115, 120, 135)),
+                    );
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let copy_btn = egui::Button::new(
+                            egui::RichText::new("📋 Copy")
+                                .size(11.0)
+                                .color(Color32::from_rgb(140, 145, 165)),
+                        )
+                        .fill(Color32::TRANSPARENT)
+                        .stroke(Stroke::NONE);
+
+                        if ui
+                            .add(copy_btn)
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text("Copy path to clipboard")
+                            .clicked()
+                        {
+                            ui.ctx().output_mut(|o| o.copied_text = launch_target.to_string());
+                        }
+                    });
+                });
+
                 ui.add_space(4.0);
+
+                // File path display
                 ui.label(
                     egui::RichText::new(launch_target)
-                        .size(13.0)
-                        .color(Color32::from_rgb(200, 205, 220)),
+                        .size(12.5)
+                        .color(Color32::from_rgb(195, 200, 215)),
                 );
 
                 if let Some(ref meta) = file.app_metadata {
-                    ui.add_space(5.0);
-                    ui.label(
-                        egui::RichText::new(format!("Source: {}", meta.source))
-                            .size(11.5)
-                            .color(Color32::from_rgb(120, 125, 140)),
-                    );
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Source:")
+                                .size(11.0)
+                                .color(Color32::from_rgb(105, 110, 125)),
+                        );
+                        ui.label(
+                            egui::RichText::new(&meta.source)
+                                .size(11.0)
+                                .color(Color32::from_rgb(135, 140, 155)),
+                        );
+                    });
                 }
             });
 
-        ui.add_space(26.0);
+        ui.add_space(22.0);
 
-        // 5. Centered Launch Action Button (+2px bigger font)
+        // 5. Centered Launch Action Button
         let launch_btn = egui::Button::new(
             egui::RichText::new("Launch  ↗")
-                .size(15.0)
+                .size(14.5)
                 .strong()
                 .color(Color32::BLACK),
         )
@@ -488,18 +863,11 @@ fn render_markdown_inline(ui: &mut Ui, text: &str, base_size: f32, base_color: C
     });
 }
 
-fn render_markdown_preview(ui: &mut Ui, path: &str) {
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) => {
-            ui.label(format!("Could not read markdown: {}", e));
-            return;
-        }
-    };
-
+fn render_markdown_preview(ui: &mut Ui, content: &str) {
     let max_w = ui.available_width();
     egui::ScrollArea::vertical()
         .id_source("markdown_preview_scroll")
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_max_width(max_w);
@@ -508,7 +876,7 @@ fn render_markdown_preview(ui: &mut Ui, path: &str) {
             let mut code_lang = String::new();
             let mut code_accumulator = String::new();
 
-            let lines: Vec<&str> = content.lines().collect();
+            let lines: Vec<&str> = content.lines().take(MAX_PREVIEW_LINES).collect();
             let mut line_idx = 0;
 
             while line_idx < lines.len() {
@@ -748,24 +1116,7 @@ fn render_markdown_table(ui: &mut Ui, rows: &[Vec<String>]) {
         });
 }
 
-fn render_excel_preview(ui: &mut Ui, path: &str) {
-    use calamine::{open_workbook_auto, Reader};
-
-    let mut workbook = match open_workbook_auto(path) {
-        Ok(wb) => wb,
-        Err(e) => {
-            ui.label(format!("Could not read Excel workbook: {}", e));
-            return;
-        }
-    };
-
-    let sheet_names = workbook.sheet_names().to_owned();
-    if sheet_names.is_empty() {
-        ui.label("Empty Excel spreadsheet");
-        return;
-    }
-
-    let first_sheet = &sheet_names[0];
+fn render_excel_preview(ui: &mut Ui, sheet_names: &[String], first_sheet: &str, rows: &[Vec<String>]) {
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new("📊 Sheet: ")
@@ -788,51 +1139,21 @@ fn render_excel_preview(ui: &mut Ui, path: &str) {
     });
     ui.add_space(6.0);
 
-    if let Ok(range) = workbook.worksheet_range(first_sheet) {
-        let rows: Vec<Vec<String>> = range
-            .rows()
-            .take(60)
-            .map(|row| row.iter().take(15).map(|c| c.to_string()).collect())
-            .collect();
-
-        render_spreadsheet_grid(ui, &rows, "excel_grid");
-    } else {
-        ui.label("Could not parse sheet data");
-    }
+    render_spreadsheet_grid(ui, rows, "excel_grid");
 }
 
-fn render_csv_preview(ui: &mut Ui, path: &str, is_tsv: bool) {
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) => {
-            ui.label(format!("Could not read file: {}", e));
-            return;
-        }
-    };
-
-    let delimiter = if is_tsv { '\t' } else { ',' };
-    let rows: Vec<Vec<String>> = content
-        .lines()
-        .take(80)
-        .map(|line| {
-            line.split(delimiter)
-                .take(15)
-                .map(|cell| cell.trim_matches('"').trim().to_string())
-                .collect()
-        })
-        .collect();
-
+fn render_csv_preview(ui: &mut Ui, rows: &[Vec<String>], total_rows: usize) {
     ui.label(
         egui::RichText::new(format!(
             "📊 {} rows previewed",
-            rows.len()
+            total_rows
         ))
         .size(12.0)
         .color(Color32::from_rgb(140, 145, 160)),
     );
     ui.add_space(6.0);
 
-    render_spreadsheet_grid(ui, &rows, "csv_grid");
+    render_spreadsheet_grid(ui, rows, "csv_grid");
 }
 
 fn render_spreadsheet_grid(ui: &mut Ui, rows: &[Vec<String>], id: &'static str) {
@@ -900,32 +1221,19 @@ fn render_spreadsheet_grid(ui: &mut Ui, rows: &[Vec<String>], id: &'static str) 
         });
 }
 
-fn render_docx_preview(ui: &mut Ui, path: &str) {
-    ui.heading("📘 Word Document Preview");
-    ui.add_space(6.0);
-
-    let doc_text = match extract_docx_text(path) {
-        Some(t) if !t.is_empty() => t,
-        _ => {
-            ui.label("Could not extract readable text from Word document.");
-            return;
-        }
-    };
-
+fn render_docx_preview(ui: &mut Ui, paragraphs: &[String]) {
     egui::ScrollArea::vertical()
         .id_source("docx_preview_scroll")
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for paragraph in doc_text.lines() {
-                let trimmed = paragraph.trim();
-                if !trimmed.is_empty() {
-                    ui.label(
-                        egui::RichText::new(trimmed)
-                            .size(13.0)
-                            .color(Color32::from_rgb(220, 225, 235)),
-                    );
-                    ui.add_space(4.0);
-                }
+            for paragraph in paragraphs {
+                ui.label(
+                    egui::RichText::new(paragraph)
+                        .size(13.0)
+                        .color(Color32::from_rgb(220, 225, 235)),
+                );
+                ui.add_space(4.0);
             }
         });
 }
@@ -981,8 +1289,10 @@ fn render_pdf_preview(ui: &mut Ui, path: &str, pdf_renderer: &mut crate::ui::pdf
     let available_w = (ui.available_width() - 36.0).max(180.0);
     let target_raster_w = (available_w * 1.5).min(1200.0) as u16;
 
+    let scroll_id = format!("pdf_scroll_{}", path);
     egui::ScrollArea::vertical()
-        .id_source("pdf_real_preview_scroll")
+        .id_source(scroll_id)
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.vertical_centered(|ui| {
@@ -1035,87 +1345,44 @@ fn render_pdf_preview(ui: &mut Ui, path: &str, pdf_renderer: &mut crate::ui::pdf
         });
 }
 
-
-fn render_json_preview(ui: &mut Ui, path: &str) {
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) => {
-            ui.label(format!("Could not read JSON: {}", e));
-            return;
-        }
-    };
-
+fn render_json_preview(ui: &mut Ui, lines: &[String]) {
     egui::ScrollArea::vertical()
         .id_source("json_preview_scroll")
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            // Indented formatting
-            let mut indent: usize = 0;
-            for line in content.lines().take(500) {
-                let trimmed = line.trim();
-                if trimmed.starts_with('}') || trimmed.starts_with(']') {
-                    indent = indent.saturating_sub(1);
-                }
-
-                let indent_spaces = "  ".repeat(indent);
+            for line in lines {
                 ui.label(
-                    egui::RichText::new(format!("{}{}", indent_spaces, trimmed))
+                    egui::RichText::new(line)
                         .monospace()
                         .size(12.0)
                         .color(Color32::from_rgb(235, 180, 110)),
                 );
-
-                if trimmed.ends_with('{') || trimmed.ends_with('[') {
-                    indent += 1;
-                }
             }
         });
 }
 
-fn render_image_preview(ui: &mut Ui, path: &str) {
-    ui.heading("🖼 Image Preview");
-    ui.add_space(8.0);
-
-    let uri = format!("file://{}", path.replace('\\', "/"));
+fn render_image_preview(ui: &mut Ui, texture: &egui::TextureHandle) {
     egui::ScrollArea::both()
         .id_source("image_preview_scroll")
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .auto_shrink([false, false])
         .show(ui, |ui| {
             let max_w = (ui.available_width() - 20.0).max(100.0);
             ui.add(
-                egui::Image::new(uri)
+                egui::Image::new(texture)
                     .max_width(max_w)
                     .rounding(Rounding::same(8.0)),
             );
         });
 }
 
-fn render_code_or_text_preview(ui: &mut Ui, path: &str) {
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => {
-            ui.vertical_centered(|ui| {
-                ui.add_space(20.0);
-                ui.label("⚠️ Non-UTF8 or Binary Content");
-                ui.add_space(6.0);
-                if ui
-                    .button("↗ Open with External Application")
-                    .clicked()
-                {
-                    let _ = open::that(path);
-                }
-            });
-            return;
-        }
-    };
-
+fn render_code_or_text_preview(ui: &mut Ui, lines: &[String], total_digits: usize) {
     egui::ScrollArea::both()
         .id_source("code_preview_scroll")
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let lines: Vec<&str> = content.lines().collect();
-            let total_digits = format!("{}", lines.len()).len();
-
             for (idx, line) in lines.iter().enumerate() {
                 ui.horizontal(|ui| {
                     let num_str = format!("{:>width$}", idx + 1, width = total_digits);
@@ -1127,7 +1394,7 @@ fn render_code_or_text_preview(ui: &mut Ui, path: &str) {
                     );
                     ui.add_space(8.0);
                     ui.label(
-                        egui::RichText::new(*line)
+                        egui::RichText::new(line)
                             .monospace()
                             .size(12.0)
                             .color(Color32::from_rgb(220, 225, 235)),

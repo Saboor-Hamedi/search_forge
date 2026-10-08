@@ -6,7 +6,7 @@ pub fn render_search_bar(
     open_settings: &mut bool,
     _result_count: usize,
     top_suggestion: Option<&str>,
-    hide_on_close: bool,
+    _hide_on_close: bool,
 ) {
     let input_id = egui::Id::new("main_search_text_edit");
 
@@ -15,9 +15,10 @@ pub fn render_search_bar(
         if let Some(suggestion) = top_suggestion {
             let lower_q = query.to_lowercase();
             let lower_s = suggestion.to_lowercase();
-            if lower_s.starts_with(&lower_q) && lower_s.len() > lower_q.len() {
-                // Suffix to display after typed query
-                Some(&suggestion[query.len()..])
+            if lower_s.starts_with(&lower_q) && lower_s.chars().count() > lower_q.chars().count() {
+                let char_skip = query.chars().count();
+                let suf: String = suggestion.chars().skip(char_skip).collect();
+                Some(suf)
             } else {
                 None
             }
@@ -70,32 +71,34 @@ pub fn render_search_bar(
                             let mut state = egui::text_edit::TextEditState::load(ui.ctx(), input_id).unwrap_or_default();
                             state.cursor.set_char_range(Some(egui::text::CCursorRange::one(cursor)));
                             state.store(ui.ctx(), input_id);
+
+                            // Keep focus on input so caret never disappears!
+                            response.request_focus();
+                            ui.ctx().memory_mut(|m| m.request_focus(input_id));
                         }
                     }
                 }
 
-                // Ghost auto-completion display positioned directly matching text baseline
-                if let Some(suffix) = completion_suffix {
+                // Ghost auto-completion display positioned directly matching text baseline with precise offset
+                if let Some(ref suffix) = completion_suffix {
                     let font_id = egui::FontId::proportional(17.0);
-                    // Use text galley for exact pixel offset and vertical baseline
                     let galley = output.galley;
-                    let ghost_x = response.rect.min.x + galley.size().x;
-                    let ghost_pos = Pos2::new(ghost_x, response.rect.min.y + 1.0);
+                    // output.galley_pos is the exact top-left coordinate where egui draws the typed text!
+                    let ghost_x = output.galley_pos.x + galley.size().x + 2.0;
+                    let ghost_pos = Pos2::new(ghost_x, output.galley_pos.y);
 
                     ui.painter().text(
                         ghost_pos,
                         egui::Align2::LEFT_TOP,
                         suffix,
                         font_id,
-                        Color32::from_rgb(85, 90, 105), // Subtle ghost gray
+                        Color32::from_rgb(105, 110, 125), // Elegant readable ghost gray
                     );
                 }
 
-                let has_focused_id = ui.make_persistent_id("search_input_initial_focused");
-                let has_focused = ui.data(|d| d.get_temp::<bool>(has_focused_id).unwrap_or(false));
-                if !has_focused {
+                // Keep focus on search input permanently unless filter settings modal is open
+                if !*open_settings && !response.has_focus() {
                     response.request_focus();
-                    ui.data_mut(|d| d.insert_temp(has_focused_id, true));
                 }
 
                 // 3. Right side controls: cleanly positioned on right with ample gap, flat styling
@@ -138,12 +141,12 @@ pub fn render_search_bar(
                         Stroke::new(1.4, stroke_col),
                     );
 
-                    if close_resp.on_hover_text(if hide_on_close { "Hide SearchForge (Spotlight mode)" } else { "Close SearchForge" }).clicked() {
-                        if hide_on_close {
-                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                        } else {
-                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                            std::process::exit(0);
+                    if close_resp.on_hover_text("Close to tray (Alt+K to open)").clicked() {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        #[cfg(target_os = "windows")]
+                        unsafe {
+                            crate::utils::tray_hotkey::hide_searchforge();
                         }
                     }
 

@@ -18,6 +18,7 @@ pub struct IconCache {
     requested_keys: Arc<Mutex<HashSet<String>>>,
     textures: Arc<RwLock<HashMap<String, TextureHandle>>>,
     sender: Arc<Mutex<Sender<(String, PathBuf)>>>,
+    ctx: Arc<RwLock<Option<Context>>>,
 }
 
 impl Default for IconCache {
@@ -31,6 +32,8 @@ impl IconCache {
         let (tx, rx) = channel::<(String, PathBuf)>();
         let raw_icons: Arc<RwLock<HashMap<String, Arc<RawIconData>>>> = Arc::new(RwLock::new(HashMap::new()));
         let raw_icons_worker = raw_icons.clone();
+        let ctx: Arc<RwLock<Option<Context>>> = Arc::new(RwLock::new(None));
+        let ctx_worker = ctx.clone();
 
         // Dedicated single background worker thread: avoids spawning 100 OS threads
         std::thread::Builder::new()
@@ -46,6 +49,12 @@ impl IconCache {
                         if let Ok(mut map) = raw_icons_worker.write() {
                             map.insert(key, icon_data);
                         }
+                        // Request egui repaint immediately so icons display without waiting for user click!
+                        if let Ok(guard) = ctx_worker.read() {
+                            if let Some(ref c) = *guard {
+                                c.request_repaint();
+                            }
+                        }
                     }
                 }
             })
@@ -56,11 +65,25 @@ impl IconCache {
             requested_keys: Arc::new(Mutex::new(HashSet::new())),
             textures: Arc::new(RwLock::new(HashMap::new())),
             sender: Arc::new(Mutex::new(tx)),
+            ctx,
+        }
+    }
+
+    pub fn set_context(&self, ctx: Context) {
+        if let Ok(mut guard) = self.ctx.write() {
+            *guard = Some(ctx);
         }
     }
 
     /// Retrieve texture if already loaded, or convert from cached raw bytes
     pub fn get_or_load_texture(&self, ctx: &Context, key: &str, path_hint: Option<&str>) -> Option<TextureHandle> {
+        if let Ok(guard) = self.ctx.read() {
+            if guard.is_none() {
+                drop(guard);
+                self.set_context(ctx.clone());
+            }
+        }
+
         // 1. Check existing egui texture
         if let Ok(tex_map) = self.textures.read() {
             if let Some(handle) = tex_map.get(key) {

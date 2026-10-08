@@ -69,6 +69,7 @@ pub fn render_results_list(
     results: &[FileRecord],
     selected_index: &mut Option<usize>,
     icon_cache: &IconCache,
+    keyboard_navigated: bool,
 ) {
     if results.is_empty() {
         let total_h = ui.available_height();
@@ -101,13 +102,13 @@ pub fn render_results_list(
 
     egui::ScrollArea::vertical()
         .id_source("results_list_scroll")
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.add_space(4.0);
-            // Display maximum of 10 results as requested
-            for (idx, record) in results.iter().take(10).enumerate() {
-        let is_selected = *selected_index == Some(idx);
-        let is_app = record.is_app();
+            for (idx, record) in results.iter().enumerate() {
+                let is_selected = *selected_index == Some(idx);
+                let is_app = record.is_app();
 
         let row_id = ui.make_persistent_id(format!("result_row_{}", idx));
         let was_hovered = ui.data(|d| d.get_temp::<bool>(row_id).unwrap_or(false));
@@ -288,6 +289,11 @@ pub fn render_results_list(
         // Click selection
         if interactive.clicked() {
             *selected_index = Some(idx);
+        }
+
+        // Auto-scroll only when navigating with arrow keys (preserves manual mouse scroll)
+        if is_selected && keyboard_navigated {
+            response.response.scroll_to_me(Some(egui::Align::Center));
         }
 
         ui.add_space(5.0);

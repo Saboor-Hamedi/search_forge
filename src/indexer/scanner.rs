@@ -16,6 +16,7 @@ pub struct FileRecord {
     pub is_dir: bool,
     pub item_type: SearchResultType,
     pub app_metadata: Option<AppMetadata>,
+    pub norm_name: String,
 }
 
 impl FileRecord {
@@ -73,15 +74,33 @@ fn extract_acronym(text: &str) -> String {
     acr
 }
 
-/// Calculate relevance score for ranking
+#[inline]
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let h_bytes = haystack.as_bytes();
+    let n_bytes = needle.as_bytes();
+    if h_bytes.len() < n_bytes.len() {
+        return false;
+    }
+    h_bytes.windows(n_bytes.len()).any(|window| window.eq_ignore_ascii_case(n_bytes))
+}
+
+/// Calculate relevance score for ranking (zero string allocations for high performance)
 pub fn score_record(norm_query: &str, record: &FileRecord) -> i64 {
     if norm_query.is_empty() {
         return 0;
     }
 
+    if record.item_type != SearchResultType::Application {
+        if crate::indexer::filters::is_build_artifact_or_chunk(&record.name) {
+            return 0;
+        }
+    }
+
     if record.item_type == SearchResultType::Application {
-        let display_name = record.display_name();
-        let norm_app_name = normalize_for_search(display_name);
+        let norm_app_name = &record.norm_name;
 
         // 1. Exact match or major priority match (Terminal, cmd, etc.)
         if (norm_query == "terminal" || norm_query == "term" || norm_query == "wt")
@@ -99,7 +118,7 @@ pub fn score_record(norm_query: &str, record: &FileRecord) -> i64 {
         }
 
         // 2. Acronym or canonical alias match
-        let acronym = extract_acronym(&norm_app_name);
+        let acronym = extract_acronym(norm_app_name);
         if acronym == norm_query {
             return 22_000;
         }
@@ -156,7 +175,7 @@ pub fn score_record(norm_query: &str, record: &FileRecord) -> i64 {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("");
-        let norm_stem = normalize_for_search(target_stem);
+        let norm_stem = target_stem.to_ascii_lowercase();
         if norm_stem == norm_query {
             return 11_000;
         }
@@ -169,22 +188,20 @@ pub fn score_record(norm_query: &str, record: &FileRecord) -> i64 {
 
         // 8. Publisher match
         if let Some(pub_name) = record.publisher() {
-            let norm_pub = normalize_for_search(pub_name);
-            if norm_pub.contains(norm_query) {
+            if pub_name.to_ascii_lowercase().contains(norm_query) {
                 return 5_000;
             }
         }
 
         // 9. Path match fallback
-        let norm_path = normalize_for_search(&record.path);
-        if norm_path.contains(norm_query) {
+        if norm_query.len() >= 4 && record.path.to_ascii_lowercase().contains(norm_query) {
             return 3_500;
         }
 
         0
     } else {
         // Ordinary file or folder
-        let norm_name = normalize_for_search(&record.name);
+        let norm_name = &record.norm_name;
 
         if norm_name == norm_query {
             return 2_000;
@@ -200,8 +217,7 @@ pub fn score_record(norm_query: &str, record: &FileRecord) -> i64 {
             return 900;
         }
 
-        let norm_path = normalize_for_search(&record.path);
-        if norm_path.contains(norm_query) {
+        if norm_query.len() >= 4 && record.path.to_ascii_lowercase().contains(norm_query) {
             return 200;
         }
 
@@ -216,37 +232,48 @@ pub fn start_background_scan(
     icon_cache: IconCache,
 ) {
     std::thread::spawn(move || {
-        // --- PHASE 1: Software Discovery & Premium Application Indexing ---
-        // Runs immediately so applications are ready within milliseconds of launch!
-        let discovered_apps = discover_installed_applications();
-        let mut app_records = Vec::with_capacity(discovered_apps.len());
+        let has_apps = {
+            if let Ok(lock) = store.read() {
+                lock.iter().any(|r| r.item_type == SearchResultType::Application)
+            } else {
+                false
+            }
+        };
 
-        for app in &discovered_apps {
-            let record = FileRecord {
-                name: app.name.clone(),
-                path: app.target_path.clone(),
-                size: 0,
-                is_dir: false,
-                item_type: SearchResultType::Application,
-                app_metadata: Some(AppMetadata {
+        if !has_apps {
+            // --- PHASE 1: Software Discovery & Premium Application Indexing ---
+            let discovered_apps = discover_installed_applications();
+            let mut app_records = Vec::with_capacity(discovered_apps.len());
+
+            for app in &discovered_apps {
+                let norm_name = normalize_for_search(&app.display_name);
+                let record = FileRecord {
                     name: app.name.clone(),
-                    display_name: app.display_name.clone(),
-                    publisher: app.publisher.clone(),
-                    version: app.version.clone(),
-                    target_path: app.target_path.clone(),
-                    shortcut_path: app.shortcut_path.clone(),
-                    icon_path: app.icon_path.clone(),
-                    source: app.source.clone(),
-                }),
-            };
-            app_records.push(record);
+                    path: app.target_path.clone(),
+                    size: 0,
+                    is_dir: false,
+                    item_type: SearchResultType::Application,
+                    app_metadata: Some(AppMetadata {
+                        name: app.name.clone(),
+                        display_name: app.display_name.clone(),
+                        publisher: app.publisher.clone(),
+                        version: app.version.clone(),
+                        target_path: app.target_path.clone(),
+                        shortcut_path: app.shortcut_path.clone(),
+                        icon_path: app.icon_path.clone(),
+                        source: app.source.clone(),
+                    }),
+                    norm_name,
+                };
+                app_records.push(record);
 
-            // Pre-extract icon in background cache
-            icon_cache.request_icon(&app.icon_path, &app.icon_path);
-        }
+                // Pre-extract icon in background cache
+                icon_cache.request_icon(&app.icon_path, &app.icon_path);
+            }
 
-        if let Ok(mut lock) = store.write() {
-            lock.append(&mut app_records);
+            if let Ok(mut lock) = store.write() {
+                lock.append(&mut app_records);
+            }
         }
 
         // --- PHASE 2: User Environment & Workspace Filesystem Discovery ---
@@ -336,23 +363,33 @@ pub fn start_background_scan(
                 }
 
                 let path_str = entry.path().to_string_lossy().to_string();
+                let name = entry.file_name().to_string_lossy().to_string();
+
+                if crate::indexer::filters::should_ignore(&path_str, &ignored)
+                    || crate::indexer::filters::is_build_artifact_or_chunk(&name)
+                {
+                    continue;
+                }
+
+                let norm_name = normalize_for_search(&name);
                 let record = FileRecord {
-                    name: entry.file_name().to_string_lossy().to_string(),
+                    name,
                     path: path_str,
                     size: metadata.len(),
                     is_dir: false,
                     item_type: SearchResultType::File,
                     app_metadata: None,
+                    norm_name,
                 };
 
                 batch.push(record);
 
-                if batch.len() >= 2000 {
+                if batch.len() >= 5000 {
                     if let Ok(mut lock) = store.write() {
                         lock.append(&mut batch);
                     }
                     batch.clear();
-                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    std::thread::sleep(std::time::Duration::from_millis(15));
                 }
             }
 
@@ -406,12 +443,21 @@ pub fn search_records(store: &[FileRecord], query: &str, limit: usize) -> Vec<Fi
     let remaining_needed = limit - app_matches.len();
     let mut file_matches: Vec<(i64, &FileRecord)> = Vec::new();
 
-    // Tier 2: Search ordinary files, score them, and sort by relevance
+    // Tier 2: Search ordinary files with fast pre-filter and early termination cap
+    const MAX_FILE_CANDIDATES: usize = 25;
     for record in store {
         if record.item_type != SearchResultType::Application {
-            let score = score_record(&norm_query, record);
-            if score > 0 {
-                file_matches.push((score, record));
+            // Zero-allocation candidate pre-filter
+            let is_match = record.norm_name.contains(&norm_query)
+                || (norm_query.len() >= 4 && contains_ignore_ascii_case(&record.path, &norm_query));
+            if is_match {
+                let score = score_record(&norm_query, record);
+                if score > 0 {
+                    file_matches.push((score, record));
+                    if file_matches.len() >= MAX_FILE_CANDIDATES {
+                        break;
+                    }
+                }
             }
         }
     }
@@ -432,6 +478,7 @@ mod tests {
     use super::*;
 
     fn create_test_app(name: &str, display_name: &str, publisher: Option<&str>, path: &str) -> FileRecord {
+        let norm_name = normalize_for_search(display_name);
         FileRecord {
             name: name.to_string(),
             path: path.to_string(),
@@ -448,10 +495,12 @@ mod tests {
                 icon_path: path.to_string(),
                 source: "Test".to_string(),
             }),
+            norm_name,
         }
     }
 
     fn create_test_file(name: &str, path: &str) -> FileRecord {
+        let norm_name = normalize_for_search(name);
         FileRecord {
             name: name.to_string(),
             path: path.to_string(),
@@ -459,6 +508,7 @@ mod tests {
             is_dir: false,
             item_type: SearchResultType::File,
             app_metadata: None,
+            norm_name,
         }
     }
 
