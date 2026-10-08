@@ -11,6 +11,7 @@ pub struct PdfPageRenderResult {
     pub width: usize,
     pub height: usize,
     pub rgba: Vec<u8>,
+    pub success: bool,
 }
 
 pub struct PdfRenderer {
@@ -19,6 +20,7 @@ pub struct PdfRenderer {
     cache: HashMap<(String, u16), TextureHandle>,
     page_counts: HashMap<String, u16>,
     requested: HashMap<(String, u16), bool>,
+    failed_pages: HashMap<(String, u16), bool>,
 }
 
 fn create_pdfium() -> Option<Pdfium> {
@@ -64,24 +66,64 @@ impl PdfRenderer {
             let pdfium_opt = create_pdfium();
             let Some(pdfium) = pdfium_opt else {
                 eprintln!("[PdfRenderer] Could not initialize Pdfium library");
+                while let Ok((path, page_index, _)) = req_rx.recv() {
+                    let _ = res_tx.send(PdfPageRenderResult {
+                        path,
+                        page_index,
+                        width: 0,
+                        height: 0,
+                        rgba: Vec::new(),
+                        success: false,
+                    });
+                }
                 return;
             };
 
             while let Ok((path, page_index, target_width)) = req_rx.recv() {
                 let doc = match pdfium.load_pdf_from_file(&path, None) {
                     Ok(d) => d,
-                    Err(_) => continue,
+                    Err(_) => {
+                        let _ = res_tx.send(PdfPageRenderResult {
+                            path,
+                            page_index,
+                            width: 0,
+                            height: 0,
+                            rgba: Vec::new(),
+                            success: false,
+                        });
+                        continue;
+                    }
                 };
 
                 let page = match doc.pages().get(page_index.into()) {
                     Ok(p) => p,
-                    Err(_) => continue,
+                    Err(_) => {
+                        let _ = res_tx.send(PdfPageRenderResult {
+                            path,
+                            page_index,
+                            width: 0,
+                            height: 0,
+                            rgba: Vec::new(),
+                            success: false,
+                        });
+                        continue;
+                    }
                 };
 
                 let render_config = PdfRenderConfig::new().set_target_width(target_width.max(300).into());
                 let bitmap = match page.render_with_config(&render_config) {
                     Ok(b) => b,
-                    Err(_) => continue,
+                    Err(_) => {
+                        let _ = res_tx.send(PdfPageRenderResult {
+                            path,
+                            page_index,
+                            width: 0,
+                            height: 0,
+                            rgba: Vec::new(),
+                            success: false,
+                        });
+                        continue;
+                    }
                 };
 
                 let width = bitmap.width() as usize;
@@ -94,6 +136,7 @@ impl PdfRenderer {
                     width,
                     height,
                     rgba,
+                    success: true,
                 });
             }
         });
@@ -104,6 +147,7 @@ impl PdfRenderer {
             cache: HashMap::new(),
             page_counts: HashMap::new(),
             requested: HashMap::new(),
+            failed_pages: HashMap::new(),
         }
     }
 
@@ -119,18 +163,27 @@ impl PdfRenderer {
 
     pub fn receive_rendered_textures(&mut self, ctx: &Context) {
         while let Ok(res) = self.rx.try_recv() {
-            let color_image = ColorImage::from_rgba_unmultiplied(
-                [res.width, res.height],
-                &res.rgba,
-            );
-            let handle = ctx.load_texture(
-                format!("pdf_{}_{}", res.path, res.page_index),
-                color_image,
-                TextureOptions::LINEAR,
-            );
-            self.cache.insert((res.path, res.page_index), handle);
+            let key = (res.path.clone(), res.page_index);
+            if res.success && res.width > 0 && res.height > 0 {
+                let color_image = ColorImage::from_rgba_unmultiplied(
+                    [res.width, res.height],
+                    &res.rgba,
+                );
+                let handle = ctx.load_texture(
+                    format!("pdf_{}_{}", res.path, res.page_index),
+                    color_image,
+                    TextureOptions::LINEAR,
+                );
+                self.cache.insert(key, handle);
+            } else {
+                self.failed_pages.insert(key, true);
+            }
             ctx.request_repaint();
         }
+    }
+
+    pub fn is_page_failed(&self, path: &str, page_index: u16) -> bool {
+        self.failed_pages.get(&(path.to_string(), page_index)).copied().unwrap_or(false)
     }
 
     pub fn get_rendered_page(
@@ -157,6 +210,7 @@ impl PdfRenderer {
         if self.cache.len() > 20 {
             self.cache.retain(|(p, _), _| p == current_path);
             self.requested.retain(|(p, _), _| p == current_path);
+            self.failed_pages.retain(|(p, _), _| p == current_path);
         }
     }
 }

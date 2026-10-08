@@ -8,10 +8,26 @@ pub fn render_filter_modal(ctx: &Context, open: &mut bool, ignored_patterns: &mu
     let draft_id = Id::new("new_ignored_pattern_draft");
     let mut draft = ctx.data_mut(|d| d.get_temp::<String>(draft_id).unwrap_or_default());
 
+    // Dimmed full-screen backdrop that absorbs all background clicks so results are never clicked through
+    let screen_rect = ctx.screen_rect();
+    egui::Area::new(Id::new("filter_modal_backdrop"))
+        .order(egui::Order::Middle)
+        .fixed_pos(screen_rect.min)
+        .interactable(true)
+        .show(ctx, |ui| {
+            let (bg_rect, bg_resp) = ui.allocate_exact_size(screen_rect.size(), egui::Sense::click());
+            ui.painter().rect_filled(bg_rect, 0.0, Color32::from_black_alpha(110));
+            // Clicking outside modal closes it
+            if bg_resp.clicked() {
+                *open = false;
+            }
+        });
+
     egui::Window::new("Exclusion Filters")
         .open(open)
         .collapsible(false)
         .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .fixed_size([340.0, 310.0])
         .frame(
             Frame::none()
@@ -61,13 +77,14 @@ pub fn render_filter_modal(ctx: &Context, open: &mut bool, ignored_patterns: &mu
 
                 let add_resp = ui.add(add_btn);
 
-                let enter_pressed = edit_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if (add_resp.clicked() || enter_pressed) && !draft.trim().is_empty() {
+                let enter_in_input = edit_resp.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                if (add_resp.clicked() || enter_in_input) && !draft.trim().is_empty() {
                     let new_pat = draft.trim().to_string();
                     if !ignored_patterns.contains(&new_pat) {
                         ignored_patterns.push(new_pat);
                     }
                     draft.clear();
+                    edit_resp.request_focus();
                 }
             });
 

@@ -45,6 +45,7 @@ fn read_bounded_text(path: &str) -> Result<(String, bool), String> {
     Ok((text, is_truncated))
 }
 
+#[derive(Clone)]
 pub enum CachedPreview {
     Loading,
     Text {
@@ -84,10 +85,14 @@ pub enum CachedPreview {
     BinaryOrError(String),
 }
 
+use std::collections::HashMap;
+
 pub struct PreviewCache {
     cached_path: String,
     content: Option<CachedPreview>,
     current_texture: Option<egui::TextureHandle>,
+    mem_cache: HashMap<String, CachedPreview>,
+    texture_cache: HashMap<String, egui::TextureHandle>,
     tx: Sender<(String, bool)>,
     rx: Receiver<(String, CachedPreview)>,
 }
@@ -106,7 +111,13 @@ impl PreviewCache {
         // Background file reading & parsing thread: guarantees main UI thread NEVER blocks on disk I/O!
         thread::spawn(move || {
             while let Ok((path, is_dir)) = req_rx.recv() {
-                let preview = Self::load_entry(&path, is_dir);
+                let path_clone = path.clone();
+                let preview = std::panic::catch_unwind(move || {
+                    Self::load_entry(&path_clone, is_dir)
+                })
+                .unwrap_or_else(|_| {
+                    CachedPreview::BinaryOrError("Error loading preview".to_string())
+                });
                 let _ = res_tx.send((path, preview));
             }
         });
@@ -115,37 +126,53 @@ impl PreviewCache {
             cached_path: String::new(),
             content: None,
             current_texture: None,
+            mem_cache: HashMap::new(),
+            texture_cache: HashMap::new(),
             tx: req_tx,
             rx: res_rx,
         }
     }
 
     pub fn poll(&mut self, ctx: &egui::Context) {
+        let mut got_update = false;
         while let Ok((path, preview)) = self.rx.try_recv() {
+            if let CachedPreview::Image { width, height, ref rgba } = preview {
+                let color_img = egui::ColorImage::from_rgba_unmultiplied([width, height], rgba);
+                let texture = ctx.load_texture(
+                    &path,
+                    color_img,
+                    egui::TextureOptions::LINEAR,
+                );
+                self.texture_cache.insert(path.clone(), texture);
+            }
             if self.cached_path == path {
-                if let CachedPreview::Image { width, height, ref rgba } = preview {
-                    let color_img = egui::ColorImage::from_rgba_unmultiplied([width, height], rgba);
-                    let texture = ctx.load_texture(
-                        &path,
-                        color_img,
-                        egui::TextureOptions::LINEAR,
-                    );
-                    self.current_texture = Some(texture);
+                if let Some(tex) = self.texture_cache.get(&path) {
+                    self.current_texture = Some(tex.clone());
                 } else {
                     self.current_texture = None;
                 }
-                self.content = Some(preview);
-                ctx.request_repaint();
+                self.content = Some(preview.clone());
+                got_update = true;
+            } else {
+                self.mem_cache.insert(path, preview);
             }
+        }
+        if got_update {
+            ctx.request_repaint();
         }
     }
 
     pub fn get_or_load(&mut self, path: &str, is_dir: bool) -> &CachedPreview {
         if self.cached_path != path {
             self.cached_path = path.to_string();
-            self.content = Some(CachedPreview::Loading);
-            self.current_texture = None;
-            let _ = self.tx.send((path.to_string(), is_dir));
+            if let Some(existing) = self.mem_cache.get(path) {
+                self.content = Some(existing.clone());
+                self.current_texture = self.texture_cache.get(path).cloned();
+            } else {
+                self.content = Some(CachedPreview::Loading);
+                self.current_texture = None;
+                let _ = self.tx.send((path.to_string(), is_dir));
+            }
         }
         self.content.as_ref().unwrap()
     }
@@ -388,27 +415,10 @@ pub fn render_preview_panel(
         return;
     }
 
-    // Top metadata header for regular files (Badge + Open button, NO redundant titles!)
-    let (badge_text, badge_color) = file_badge_info(&file.name, file.is_dir);
-
-    ui.add_space(10.0); // Bring down from top search bar
+    // Top action row for regular files (Yellow signature "Open" button on the right, shifted to the left)
+    ui.add_space(8.0);
 
     ui.horizontal(|ui| {
-        // Clean typography badge
-        Frame::none()
-            .fill(badge_color.linear_multiply(0.2))
-            .rounding(Rounding::same(4.0))
-            .inner_margin(Margin::symmetric(7.0, 4.0))
-            .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new(badge_text)
-                        .size(11.0)
-                        .strong()
-                        .color(badge_color),
-                );
-            });
-
-        // Yellow signature "Open" button on the right side of preview header, shifted to the left
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(24.0); // Moved to the left away from far right edge
             let open_btn = egui::Button::new(
@@ -1319,6 +1329,23 @@ fn render_pdf_preview(ui: &mut Ui, path: &str, pdf_renderer: &mut crate::ui::pdf
                                         .rounding(Rounding::same(2.0)),
                                 );
                             });
+                    } else if pdf_renderer.is_page_failed(path, page_idx) {
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::Vec2::new(available_w, 140.0),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter().rect_filled(
+                            rect,
+                            Rounding::same(4.0),
+                            Color32::from_rgb(26, 28, 36),
+                        );
+                        ui.painter().text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "📄 PDF preview requires external viewer",
+                            egui::FontId::proportional(12.5),
+                            Color32::from_rgb(160, 165, 180),
+                        );
                     } else {
                         // Sleek minimal placeholder while rasterizing in background
                         let (rect, _) = ui.allocate_exact_size(

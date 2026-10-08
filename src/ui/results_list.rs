@@ -22,6 +22,7 @@ pub fn file_badge_info(name: &str, is_dir: bool) -> (&'static str, Color32) {
         "xlsx" | "xls" | "ods" => ("XLS", Color32::from_rgb(40, 180, 100)),
         "csv" | "tsv" => ("CSV", Color32::from_rgb(35, 165, 120)),
         "docx" | "doc" => ("DOC", Color32::from_rgb(50, 140, 245)),
+        "pptx" | "ppt" => ("PPT", Color32::from_rgb(245, 130, 45)),
         "json" => ("JSON", Color32::from_rgb(235, 140, 50)),
         "toml" | "yaml" | "yml" | "xml" | "ini" | "env" => ("CFG", Color32::from_rgb(220, 130, 60)),
         "rs" => ("RS", Color32::from_rgb(230, 90, 40)),
@@ -34,16 +35,6 @@ pub fn file_badge_info(name: &str, is_dir: bool) -> (&'static str, Color32) {
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" => ("IMG", Color32::from_rgb(45, 195, 185)),
         "zip" | "tar" | "gz" | "7z" | "rar" => ("ZIP", Color32::from_rgb(210, 170, 50)),
         _ => ("FILE", Color32::from_rgb(140, 145, 160)),
-    }
-}
-
-fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.chars().count() <= max_len {
-        s.to_string()
-    } else {
-        let mut truncated: String = s.chars().take(max_len.saturating_sub(3)).collect();
-        truncated.push_str("...");
-        truncated
     }
 }
 
@@ -70,6 +61,7 @@ pub fn render_results_list(
     selected_index: &mut Option<usize>,
     icon_cache: &IconCache,
     keyboard_navigated: bool,
+    modal_open: bool,
 ) {
     if results.is_empty() {
         let total_h = ui.available_height();
@@ -177,94 +169,114 @@ pub fn render_results_list(
                     ui.add_space(8.0);
 
                     // Application Title and Publisher / Type metadata
-                    ui.vertical(|ui| {
-                        let app_name = record.display_name();
-                        let truncated_name = truncate_string(app_name, 34);
-                        ui.label(
-                            egui::RichText::new(truncated_name)
-                                .size(15.5)
-                                .strong()
-                                .color(if is_selected {
-                                    Color32::WHITE
-                                } else {
-                                    Color32::from_rgb(225, 230, 240)
-                                }),
-                        );
+                    let app_w = (ui.available_width() - 8.0).max(80.0);
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(app_w, 32.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_width(app_w);
+                            let app_name = record.display_name();
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(app_name)
+                                        .size(14.0)
+                                        .strong()
+                                        .color(if is_selected {
+                                            Color32::WHITE
+                                        } else {
+                                            Color32::from_rgb(225, 230, 240)
+                                        }),
+                                )
+                                .truncate(true),
+                            );
 
-                        // Secondary subtitle: Publisher · Application
-                        let subtitle = if let Some(pub_name) = record.publisher() {
-                            format!("{} · Application", pub_name)
-                        } else {
-                            "Installed Application".to_string()
-                        };
-                        let truncated_sub = truncate_string(&subtitle, 36);
-                        ui.label(
-                            egui::RichText::new(truncated_sub)
-                                .size(12.5)
-                                .color(if is_selected {
-                                    Color32::from_rgb(155, 160, 180)
-                                } else {
-                                    Color32::from_rgb(130, 135, 150)
-                                }),
-                        );
-                    });
+                            let subtitle = if let Some(pub_name) = record.publisher() {
+                                format!("{} · Application", pub_name)
+                            } else {
+                                "Installed Application".to_string()
+                            };
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(subtitle)
+                                        .size(11.0)
+                                        .color(if is_selected {
+                                            Color32::from_rgb(155, 160, 180)
+                                        } else {
+                                            Color32::from_rgb(130, 135, 150)
+                                        }),
+                                )
+                                .truncate(true),
+                            );
+                        },
+                    );
                 } else {
                     // --- ORDINARY FILE / FOLDER PRESENTATION ---
                     let (badge_text, badge_color) = file_badge_info(&record.name, record.is_dir);
 
                     Frame::none()
                         .fill(badge_color.linear_multiply(0.2))
-                        .rounding(Rounding::same(4.0))
-                        .inner_margin(Margin::symmetric(6.0, 3.0))
+                        .rounding(Rounding::same(3.0))
+                        .inner_margin(Margin::symmetric(5.0, 2.0))
                         .show(ui, |ui| {
                             ui.label(
                                 egui::RichText::new(badge_text)
-                                    .size(11.5)
+                                    .size(10.0)
                                     .strong()
                                     .color(badge_color),
                             );
                         });
 
-                    ui.add_space(8.0);
+                    ui.add_space(6.0);
 
-                    // File name & breadcrumb path
-                    ui.vertical(|ui| {
-                        let truncated_name = truncate_string(&record.name, 34);
-                        ui.label(
-                            egui::RichText::new(truncated_name)
-                                .size(15.0)
-                                .strong()
-                                .color(if is_selected {
-                                    Color32::WHITE
-                                } else {
-                                    Color32::from_rgb(220, 225, 235)
-                                }),
-                        );
+                    let size_text = if record.is_dir {
+                        "DIR".to_string()
+                    } else {
+                        format_size(record.size)
+                    };
+                    let size_pill_w = 56.0;
+                    let text_w = (ui.available_width() - size_pill_w - 6.0).max(60.0);
 
-                        let parent = Path::new(&record.path)
-                            .parent()
-                            .and_then(|p| p.to_str())
-                            .unwrap_or("");
-                        let truncated_parent = truncate_string(parent, 36);
-                        ui.label(
-                            egui::RichText::new(truncated_parent)
-                                .size(12.5)
-                                .color(if is_selected {
-                                    Color32::from_rgb(155, 160, 180)
-                                } else {
-                                    Color32::from_rgb(130, 135, 150)
-                                }),
-                        );
-                    });
+                    // File name & breadcrumb path (contained in middle space)
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(text_w, 32.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_width(text_w);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&record.name)
+                                        .size(13.5)
+                                        .strong()
+                                        .color(if is_selected {
+                                            Color32::WHITE
+                                        } else {
+                                            Color32::from_rgb(220, 225, 235)
+                                        }),
+                                )
+                                .truncate(true),
+                            );
+
+                            let parent = Path::new(&record.path)
+                                .parent()
+                                .and_then(|p| p.to_str())
+                                .unwrap_or("");
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(parent)
+                                        .size(11.0)
+                                        .color(if is_selected {
+                                            Color32::from_rgb(155, 160, 180)
+                                        } else {
+                                            Color32::from_rgb(130, 135, 150)
+                                        }),
+                                )
+                                .truncate(true),
+                            );
+                        },
+                    );
 
                     // Right side size indicator pill
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let size_text = if record.is_dir {
-                            "DIR".to_string()
-                        } else {
-                            format_size(record.size)
-                        };
-
                         Frame::none()
                             .fill(Color32::from_rgb(28, 30, 38))
                             .rounding(Rounding::same(3.0))
@@ -272,7 +284,7 @@ pub fn render_results_list(
                             .show(ui, |ui| {
                                 ui.label(
                                     egui::RichText::new(size_text)
-                                        .size(11.5)
+                                        .size(10.0)
                                         .color(Color32::from_rgb(140, 145, 160)),
                                 );
                             });
@@ -281,13 +293,17 @@ pub fn render_results_list(
             });
         });
 
-        let interactive = response.response.interact(egui::Sense::click())
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        let is_now_hovered = interactive.hovered();
+        let interactive = response.response.interact(egui::Sense::click());
+        let interactive = if !modal_open {
+            interactive.on_hover_cursor(egui::CursorIcon::PointingHand)
+        } else {
+            interactive
+        };
+        let is_now_hovered = !modal_open && interactive.hovered();
         ui.data_mut(|d| d.insert_temp(row_id, is_now_hovered));
 
-        // Click selection
-        if interactive.clicked() {
+        // Click selection - only if no modal is active
+        if !modal_open && interactive.clicked() {
             *selected_index = Some(idx);
         }
 

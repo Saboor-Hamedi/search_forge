@@ -197,29 +197,31 @@ impl App for SearchForgeApp {
             }
         }
 
-        // Keyboard navigation (VS Code Ctrl+P / Spotlight style)
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
-            if !self.results.is_empty() {
-                let next = match self.selected_index {
-                    Some(idx) => (idx + 1).min(self.results.len().saturating_sub(1)),
-                    None => 0,
-                };
-                self.selected_index = Some(next);
-                self.keyboard_navigated = true;
-            }
-        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
-            if !self.results.is_empty() {
-                let prev = match self.selected_index {
-                    Some(idx) => idx.saturating_sub(1),
-                    None => 0,
-                };
-                self.selected_index = Some(prev);
-                self.keyboard_navigated = true;
-            }
-        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
-            if let Some(idx) = self.selected_index {
-                if let Some(file) = self.results.get(idx) {
-                    let _ = open::that(file.launch_target());
+        // Keyboard navigation (VS Code Ctrl+P / Spotlight style) - only active when modals are closed
+        if !self.open_settings && !self.open_preferences {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
+                if !self.results.is_empty() {
+                    let next = match self.selected_index {
+                        Some(idx) => (idx + 1).min(self.results.len().saturating_sub(1)),
+                        None => 0,
+                    };
+                    self.selected_index = Some(next);
+                    self.keyboard_navigated = true;
+                }
+            } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
+                if !self.results.is_empty() {
+                    let prev = match self.selected_index {
+                        Some(idx) => idx.saturating_sub(1),
+                        None => 0,
+                    };
+                    self.selected_index = Some(prev);
+                    self.keyboard_navigated = true;
+                }
+            } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+                if let Some(idx) = self.selected_index {
+                    if let Some(file) = self.results.get(idx) {
+                        let _ = open::that(file.launch_target());
+                    }
                 }
             }
         }
@@ -243,8 +245,6 @@ impl App for SearchForgeApp {
             }
             self.last_search_query = self.search_query.clone();
         }
-
-        filter_modal::render_filter_modal(ctx, &mut self.open_settings, &mut self.ignored_patterns);
 
         // Unified rounded window container with native 6px rounding and 1px border
         egui::CentralPanel::default()
@@ -300,6 +300,7 @@ impl App for SearchForgeApp {
                                     &mut self.selected_index,
                                     &self.icon_cache,
                                     self.keyboard_navigated,
+                                    self.open_settings || self.open_preferences,
                                 );
                                 self.keyboard_navigated = false;
                             },
@@ -393,6 +394,9 @@ impl App for SearchForgeApp {
                         );
                     });
             });
+
+        // Render filter modal on top of CentralPanel
+        filter_modal::render_filter_modal(ctx, &mut self.open_settings, &mut self.ignored_patterns);
     }
 }
 
