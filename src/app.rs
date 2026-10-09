@@ -11,6 +11,7 @@ use crate::utils::updater::UpdateManager;
 pub struct SearchForgeApp {
     search_query: String,
     last_search_query: String,
+    last_ignored_patterns: Vec<String>,
     store: Arc<RwLock<Vec<FileRecord>>>,
     results: Vec<FileRecord>,
     selected_index: Option<usize>,
@@ -27,6 +28,7 @@ pub struct SearchForgeApp {
     is_window_visible: bool,
     keyboard_navigated: bool,
     preview_cache: crate::ui::preview_panel::PreviewCache,
+    suppress_k_frames: u8,
 }
 
 impl SearchForgeApp {
@@ -106,6 +108,7 @@ impl SearchForgeApp {
         Self {
             search_query: String::new(),
             last_search_query: String::new(),
+            last_ignored_patterns: ignored_patterns.clone(),
             store,
             results: initial_10,
             selected_index: initial_selected,
@@ -122,11 +125,13 @@ impl SearchForgeApp {
             is_window_visible: true,
             keyboard_navigated: false,
             preview_cache: crate::ui::preview_panel::PreviewCache::new(),
+            suppress_k_frames: 0,
         }
     }
 
     pub fn show_window(&mut self, ctx: &Context) {
         self.is_window_visible = true;
+        self.suppress_k_frames = 3;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -147,14 +152,28 @@ impl SearchForgeApp {
         ctx.request_repaint();
 
         #[cfg(target_os = "windows")]
-        unsafe {
-            crate::utils::tray_hotkey::hide_searchforge();
+        if let Some(hwnd) = crate::utils::tray_hotkey::find_searchforge_window() {
+            crate::utils::tray_hotkey::hide_searchforge_window(hwnd);
         }
     }
 }
 
 impl App for SearchForgeApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // Suppress stray 'k' key leakage when waking up via Alt+K
+        if self.suppress_k_frames > 0 {
+            self.suppress_k_frames -= 1;
+            ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::ALT, egui::Key::K);
+                i.consume_key(egui::Modifiers::NONE, egui::Key::K);
+                i.events.retain(|e| match e {
+                    egui::Event::Key { key: egui::Key::K, .. } => false,
+                    egui::Event::Text(t) if t.eq_ignore_ascii_case("k") => false,
+                    _ => true,
+                });
+            });
+        }
+
         // Poll background updater events on each frame
         self.updater.poll_updates();
 
@@ -227,13 +246,14 @@ impl App for SearchForgeApp {
         }
 
         let query_changed = self.search_query != self.last_search_query;
+        let patterns_changed = self.ignored_patterns != self.last_ignored_patterns;
         let needs_initial_population = !self.initial_apps_loaded && self.search_query.trim().is_empty();
-        if query_changed || needs_initial_population {
+        if query_changed || patterns_changed || needs_initial_population {
             if let Ok(store_lock) = self.store.read() {
                 if !store_lock.is_empty() {
                     let limit = 10;
-                    self.results = search_records(&store_lock, &self.search_query, limit);
-                    if query_changed {
+                    self.results = search_records(&store_lock, &self.search_query, limit, &self.ignored_patterns);
+                    if query_changed || patterns_changed {
                         self.selected_index = if self.results.is_empty() { None } else { Some(0) };
                     } else if self.selected_index.is_none() && !self.results.is_empty() {
                         self.selected_index = Some(0);
@@ -244,6 +264,7 @@ impl App for SearchForgeApp {
                 }
             }
             self.last_search_query = self.search_query.clone();
+            self.last_ignored_patterns = self.ignored_patterns.clone();
         }
 
         // Unified rounded window container with native 6px rounding and 1px border

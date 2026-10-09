@@ -42,10 +42,11 @@ pub fn find_searchforge_window() -> Option<win32::HWND> {
 #[cfg(target_os = "windows")]
 pub fn bring_window_to_foreground(hwnd: win32::HWND) {
     unsafe {
-        // Restore window if minimized
+        if let Some(ref mut state) = GLOBAL_TRAY_STATE {
+            state.is_visible = true;
+        }
         win32::ShowWindow(hwnd, win32::SW_RESTORE);
         win32::ShowWindow(hwnd, win32::SW_SHOW);
-        // Force foreground activation
         win32::SetForegroundWindow(hwnd);
         win32::BringWindowToTop(hwnd);
         win32::SetFocus(hwnd);
@@ -55,6 +56,9 @@ pub fn bring_window_to_foreground(hwnd: win32::HWND) {
 #[cfg(target_os = "windows")]
 pub fn hide_searchforge_window(hwnd: win32::HWND) {
     unsafe {
+        if let Some(ref mut state) = GLOBAL_TRAY_STATE {
+            state.is_visible = false;
+        }
         win32::ShowWindow(hwnd, win32::SW_HIDE);
     }
 }
@@ -69,6 +73,91 @@ fn start_tray_and_hotkey_listener(sender: Sender<TrayEvent>, ctx: Context) {
             }
         })
         .ok();
+}
+
+#[cfg(target_os = "windows")]
+#[cfg(target_os = "windows")]
+fn load_tray_hicon() -> win32::HICON {
+    let ico_bytes = include_bytes!("../assets/icons/image.ico");
+    if ico_bytes.len() >= 6 {
+        let count = u16::from_le_bytes([ico_bytes[4], ico_bytes[5]]) as usize;
+        let mut best_offset = 0;
+        let mut best_size = 0;
+        let mut best_diff = i32::MAX;
+        let target_size = 16;
+        for i in 0..count {
+            let entry_offset = 6 + i * 16;
+            if entry_offset + 16 <= ico_bytes.len() {
+                let w = match ico_bytes[entry_offset] {
+                    0 => 256,
+                    other => other as i32,
+                };
+                let bytes_in_res = u32::from_le_bytes([
+                    ico_bytes[entry_offset + 8],
+                    ico_bytes[entry_offset + 9],
+                    ico_bytes[entry_offset + 10],
+                    ico_bytes[entry_offset + 11],
+                ]) as usize;
+                let img_offset = u32::from_le_bytes([
+                    ico_bytes[entry_offset + 12],
+                    ico_bytes[entry_offset + 13],
+                    ico_bytes[entry_offset + 14],
+                    ico_bytes[entry_offset + 15],
+                ]) as usize;
+                let diff = (w - target_size).abs();
+                if diff < best_diff && img_offset + bytes_in_res <= ico_bytes.len() {
+                    best_diff = diff;
+                    best_offset = img_offset;
+                    best_size = bytes_in_res;
+                }
+            }
+        }
+        if best_size > 0 {
+            let res_bytes = &ico_bytes[best_offset..best_offset + best_size];
+            let hicon = unsafe {
+                win32::CreateIconFromResourceEx(
+                    res_bytes.as_ptr(),
+                    best_size as u32,
+                    1,
+                    0x00030000,
+                    16,
+                    16,
+                    0,
+                )
+            };
+            if !hicon.is_null() {
+                return hicon;
+            }
+        }
+    }
+
+    // Fallback: try raw PNG bytes (supported natively on Vista+)
+    let png_bytes = include_bytes!("../assets/icons/image_64.png");
+    let hicon = unsafe {
+        win32::CreateIconFromResourceEx(
+            png_bytes.as_ptr(),
+            png_bytes.len() as u32,
+            1,
+            0x00030000,
+            16,
+            16,
+            0,
+        )
+    };
+    if !hicon.is_null() {
+        return hicon;
+    }
+
+    // Fallback: LoadIconW
+    unsafe {
+        let h_instance = win32::GetModuleHandleW(std::ptr::null());
+        let h = win32::LoadIconW(h_instance, 1 as *const u16);
+        if !h.is_null() {
+            h
+        } else {
+            win32::LoadIconW(std::ptr::null_mut(), win32::IDI_APPLICATION)
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -99,7 +188,7 @@ unsafe fn run_win32_tray_and_hotkey(sender: Sender<TrayEvent>, ctx: Context) {
 
     win32::RegisterClassExW(&wnd_class);
 
-    // Create a message-only window
+    // Create a hidden top-level window (HWND_MESSAGE does NOT receive global hotkeys or tray events reliably)
     let hwnd = win32::CreateWindowExW(
         0,
         class_name.as_ptr(),
@@ -109,7 +198,7 @@ unsafe fn run_win32_tray_and_hotkey(sender: Sender<TrayEvent>, ctx: Context) {
         0,
         0,
         0,
-        win32::HWND_MESSAGE,
+        std::ptr::null_mut(),
         std::ptr::null_mut(),
         h_instance,
         std::ptr::null_mut(),
@@ -124,7 +213,6 @@ unsafe fn run_win32_tray_and_hotkey(sender: Sender<TrayEvent>, ctx: Context) {
     });
 
     // Register Alt + K as system-wide global hotkey
-    // Try MOD_ALT | MOD_NOREPEAT first, fallback to MOD_ALT
     let hotkey_registered = win32::RegisterHotKey(
         hwnd,
         win32::HOTKEY_ID_ALT_K,
@@ -141,13 +229,8 @@ unsafe fn run_win32_tray_and_hotkey(sender: Sender<TrayEvent>, ctx: Context) {
         eprintln!("Warning: Could not register global Alt+K hotkey (may already be in use by another app)");
     }
 
-    // Load application icon from binary resource or fallback
-    let h_icon = win32::LoadIconW(h_instance, 1 as *const u16);
-    let h_icon = if !h_icon.is_null() {
-        h_icon
-    } else {
-        win32::LoadIconW(std::ptr::null_mut(), win32::IDI_APPLICATION)
-    };
+    // Load application icon from embedded icon resource
+    let h_icon = load_tray_hicon();
 
     // Prepare system tray notification icon
     let mut tip: [u16; 128] = [0; 128];
@@ -244,20 +327,12 @@ unsafe extern "system" fn tray_window_proc(
 #[cfg(target_os = "windows")]
 unsafe fn toggle_searchforge() {
     let main_hwnd_opt = find_searchforge_window();
-    let is_currently_visible = if let Some(ref state) = GLOBAL_TRAY_STATE {
-        state.is_visible
-    } else {
-        true
-    };
-
-    if is_currently_visible {
-        // If window is open and foreground, hide it
-        if let Some(hwnd) = main_hwnd_opt {
-            let fg = win32::GetForegroundWindow();
-            if fg == hwnd {
-                hide_searchforge();
-                return;
-            }
+    if let Some(hwnd) = main_hwnd_opt {
+        let is_visible = win32::IsWindowVisible(hwnd) != 0;
+        let fg = win32::GetForegroundWindow();
+        if is_visible && fg == hwnd {
+            hide_searchforge();
+            return;
         }
     }
 
@@ -272,8 +347,13 @@ pub unsafe fn show_searchforge() {
         let _ = state.sender.send(TrayEvent::Show);
         state.ctx.request_repaint();
     }
+    // Directly restore and activate the HWND so winit processes the wakeup immediately
     if let Some(hwnd) = find_searchforge_window() {
-        bring_window_to_foreground(hwnd);
+        win32::ShowWindow(hwnd, win32::SW_RESTORE);
+        win32::ShowWindow(hwnd, win32::SW_SHOW);
+        win32::SetForegroundWindow(hwnd);
+        win32::BringWindowToTop(hwnd);
+        win32::SetFocus(hwnd);
     }
 }
 
@@ -285,7 +365,7 @@ pub unsafe fn hide_searchforge() {
         state.ctx.request_repaint();
     }
     if let Some(hwnd) = find_searchforge_window() {
-        hide_searchforge_window(hwnd);
+        win32::ShowWindow(hwnd, win32::SW_HIDE);
     }
 }
 
@@ -345,8 +425,6 @@ pub mod win32 {
     pub type UINT = u32;
     pub type BOOL = i32;
     pub type DWORD = u32;
-
-    pub const HWND_MESSAGE: HWND = (-3isize) as HWND;
 
     pub const WM_HOTKEY: UINT = 0x0312;
     pub const WM_APP: UINT = 0x8000;
@@ -470,11 +548,27 @@ pub mod win32 {
         pub fn TrackPopupMenu(h_menu: HMENU, u_flags: UINT, x: i32, y: i32, n_reserved: i32, h_wnd: HWND, prc_rect: *const c_void) -> BOOL;
         pub fn DestroyMenu(h_menu: HMENU) -> BOOL;
         pub fn LoadIconW(h_instance: HINSTANCE, lp_icon_name: *const u16) -> HICON;
+        pub fn CreateIconFromResourceEx(
+            pb_icon_bits: *const u8,
+            cb_icon_bits: DWORD,
+            f_icon: BOOL,
+            dw_version: DWORD,
+            cx_desired: i32,
+            cy_desired: i32,
+            u_flags: UINT,
+        ) -> HICON;
+        pub fn IsWindowVisible(h_wnd: HWND) -> BOOL;
+        #[allow(dead_code)]
+        pub fn AttachThreadInput(id_attach: DWORD, id_attach_to: DWORD, f_attach: BOOL) -> BOOL;
+        #[allow(dead_code)]
+        pub fn GetWindowThreadProcessId(h_wnd: HWND, lpdw_process_id: *mut DWORD) -> DWORD;
     }
 
     #[link(name = "kernel32")]
     extern "system" {
         pub fn GetModuleHandleW(lp_module_name: *const u16) -> HINSTANCE;
+        #[allow(dead_code)]
+        pub fn GetCurrentThreadId() -> DWORD;
     }
 
     #[link(name = "shell32")]

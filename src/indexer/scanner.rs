@@ -403,15 +403,82 @@ pub fn start_background_scan(
     });
 }
 
+/// Check whether a file or application record matches user-defined exclusion patterns
+pub fn is_record_ignored(record: &FileRecord, ignored: &[String]) -> bool {
+    if ignored.is_empty() {
+        return false;
+    }
+    let file_name = &record.name;
+    let path = &record.path;
+
+    for pattern in ignored {
+        let p = pattern.trim();
+        if p.is_empty() {
+            continue;
+        }
+        let p_trimmed = p.trim_matches(|c| c == '/' || c == '\\');
+
+        // 1. Direct name match (e.g. ".env", "node_modules", "target")
+        if file_name.eq_ignore_ascii_case(p_trimmed) {
+            return true;
+        }
+
+        // 2. Wildcard pattern (e.g. "*.env", "*.tmp", "*.log")
+        if let Some(ext) = p.strip_prefix("*.") {
+            if let Some(file_ext) = std::path::Path::new(file_name).extension().and_then(|e| e.to_str()) {
+                if file_ext.eq_ignore_ascii_case(ext) {
+                    return true;
+                }
+            }
+        }
+
+        // For applications, do not filter them based on default system folder names
+        if record.item_type == SearchResultType::Application {
+            if p_trimmed.eq_ignore_ascii_case("AppData")
+                || p_trimmed.eq_ignore_ascii_case("ProgramData")
+                || p_trimmed.eq_ignore_ascii_case("Program Files")
+                || p_trimmed.eq_ignore_ascii_case("Program Files (x86)")
+                || p_trimmed.eq_ignore_ascii_case("Windows")
+            {
+                continue;
+            }
+            if record.display_name().eq_ignore_ascii_case(p_trimmed) {
+                return true;
+            }
+        }
+
+        // 3. Fast zero-allocation path segment match (split by / or \)
+        for segment in path.split(|c| c == '/' || c == '\\') {
+            if segment.eq_ignore_ascii_case(p_trimmed) {
+                return true;
+            }
+        }
+
+        // 4. Substring contains match on path (only for non-applications)
+        if record.item_type != SearchResultType::Application {
+            if contains_ignore_ascii_case(path, p_trimmed) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// High performance, premium ranked search with instant early termination
-pub fn search_records(store: &[FileRecord], query: &str, limit: usize) -> Vec<FileRecord> {
+pub fn search_records(
+    store: &[FileRecord],
+    query: &str,
+    limit: usize,
+    ignored: &[String],
+) -> Vec<FileRecord> {
     let trimmed = query.trim();
 
     // Section 12: Empty query suggestions - return top installed applications
     if trimmed.is_empty() {
         return store
             .iter()
-            .filter(|r| r.item_type == SearchResultType::Application)
+            .filter(|r| r.item_type == SearchResultType::Application && !is_record_ignored(r, ignored))
             .take(limit)
             .cloned()
             .collect();
@@ -423,6 +490,9 @@ pub fn search_records(store: &[FileRecord], query: &str, limit: usize) -> Vec<Fi
     let mut app_matches: Vec<(i64, &FileRecord)> = Vec::new();
     for record in store {
         if record.item_type == SearchResultType::Application {
+            if is_record_ignored(record, ignored) {
+                continue;
+            }
             let score = score_record(&norm_query, record);
             if score > 0 {
                 app_matches.push((score, record));
@@ -447,10 +517,13 @@ pub fn search_records(store: &[FileRecord], query: &str, limit: usize) -> Vec<Fi
     const MAX_FILE_CANDIDATES: usize = 25;
     for record in store {
         if record.item_type != SearchResultType::Application {
-            // Zero-allocation candidate pre-filter
+            // Zero-allocation candidate pre-filter evaluated FIRST before any ignore checking
             let is_match = record.norm_name.contains(&norm_query)
                 || (norm_query.len() >= 4 && contains_ignore_ascii_case(&record.path, &norm_query));
             if is_match {
+                if is_record_ignored(record, ignored) {
+                    continue;
+                }
                 let score = score_record(&norm_query, record);
                 if score > 0 {
                     file_matches.push((score, record));
@@ -521,7 +594,7 @@ mod tests {
             create_test_file("notes_about_vscode.md", "C:/Users/User/Documents/notes_about_vscode.md"),
         ];
 
-        let results = search_records(&store, "vscode", 5);
+        let results = search_records(&store, "vscode", 5, &[]);
         assert!(!results.is_empty());
         assert_eq!(results[0].display_name(), "Visual Studio Code");
         assert_eq!(results[0].item_type, SearchResultType::Application);
@@ -534,7 +607,7 @@ mod tests {
             create_test_app("Sublime Text", "Sublime Text", Some("Sublime HQ"), "C:/Program Files/Sublime Text/sublime_text.exe"),
         ];
 
-        let results = search_records(&store, "sublime", 5);
+        let results = search_records(&store, "sublime", 5, &[]);
         assert!(!results.is_empty());
         assert_eq!(results[0].display_name(), "Sublime Text");
         assert_eq!(results[0].item_type, SearchResultType::Application);
@@ -547,7 +620,7 @@ mod tests {
             create_test_app("Apache NetBeans", "Apache NetBeans", Some("Apache"), "C:/Program Files/NetBeans/bin/netbeans64.exe"),
         ];
 
-        let results = search_records(&store, "netbeans", 5);
+        let results = search_records(&store, "netbeans", 5, &[]);
         assert!(!results.is_empty());
         assert_eq!(results[0].display_name(), "Apache NetBeans");
         assert_eq!(results[0].item_type, SearchResultType::Application);
@@ -560,7 +633,7 @@ mod tests {
             create_test_app("DBeaver", "DBeaver", Some("DBeaver Corp"), "C:/Users/User/AppData/Local/DBeaver/dbeaver.exe"),
         ];
 
-        let results = search_records(&store, "dbeaver", 5);
+        let results = search_records(&store, "dbeaver", 5, &[]);
         assert!(!results.is_empty());
         assert_eq!(results[0].display_name(), "DBeaver");
         assert_eq!(results[0].item_type, SearchResultType::Application);
@@ -574,12 +647,12 @@ mod tests {
             create_test_app("Windows Terminal", "Windows Terminal", Some("Microsoft Corporation"), "C:/Users/User/AppData/Local/Microsoft/WindowsApps/wt.exe"),
         ];
 
-        let results = search_records(&store, "terminal", 5);
+        let results = search_records(&store, "terminal", 5, &[]);
         assert!(!results.is_empty());
         assert_eq!(results[0].display_name(), "Windows Terminal");
         assert_eq!(results[0].item_type, SearchResultType::Application);
 
-        let results_wt = search_records(&store, "wt", 5);
+        let results_wt = search_records(&store, "wt", 5, &[]);
         assert!(!results_wt.is_empty());
         assert_eq!(results_wt[0].display_name(), "Windows Terminal");
     }
@@ -593,9 +666,22 @@ mod tests {
             create_test_file("file2.txt", "C:/file2.txt"),
         ];
 
-        let results = search_records(&store, "", 5);
+        let results = search_records(&store, "", 5, &[]);
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|r| r.item_type == SearchResultType::Application));
+    }
+
+    #[test]
+    fn test_search_respects_ignored_patterns() {
+        let store = vec![
+            create_test_file(".env", "C:/Projects/SearchForge/.env"),
+            create_test_file(".env.local", "C:/Projects/SearchForge/.env.local"),
+            create_test_file("config.json", "C:/Projects/SearchForge/config.json"),
+        ];
+
+        let ignored = vec![".env".to_string()];
+        let results = search_records(&store, ".env", 5, &ignored);
+        assert!(results.iter().all(|r| r.name != ".env"));
     }
 }
 

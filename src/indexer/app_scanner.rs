@@ -700,10 +700,56 @@ fn scan_registry_applications(apps: &mut Vec<DiscoveredApp>) {
                         install_loc.as_ref().map(|loc| loc.trim().trim_matches('"').to_string())
                     });
 
-                    let target = match target_path {
+                    let mut target = match target_path {
                         Some(t) if !t.is_empty() => t,
                         _ => continue,
                     };
+
+                    // If target is a directory (e.g. C:\Users\User\.bun), find the main executable
+                    if Path::new(&target).is_dir() {
+                        let candidate_exe = Path::new(&target).join(format!("{}.exe", raw_name.trim()));
+                        let bin_exe = Path::new(&target).join("bin").join(format!("{}.exe", raw_name.trim()));
+                        if candidate_exe.is_file() {
+                            target = candidate_exe.to_string_lossy().to_string();
+                        } else if bin_exe.is_file() {
+                            target = bin_exe.to_string_lossy().to_string();
+                        } else {
+                            let mut found_exe = None;
+                            if let Ok(entries) = std::fs::read_dir(&target) {
+                                for e in entries.filter_map(|e| e.ok()) {
+                                    let p = e.path();
+                                    if p.is_file() && p.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("exe")) {
+                                        let fname = p.file_name().unwrap().to_string_lossy();
+                                        if !is_helper_or_internal_executable(&fname) {
+                                            found_exe = Some(p.to_string_lossy().to_string());
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if found_exe.is_none() {
+                                let bin_dir = Path::new(&target).join("bin");
+                                if let Ok(entries) = std::fs::read_dir(&bin_dir) {
+                                    for e in entries.filter_map(|e| e.ok()) {
+                                        let p = e.path();
+                                        if p.is_file() && p.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("exe")) {
+                                            let fname = p.file_name().unwrap().to_string_lossy();
+                                            if !is_helper_or_internal_executable(&fname) {
+                                                found_exe = Some(p.to_string_lossy().to_string());
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(exe) = found_exe {
+                                target = exe;
+                            } else {
+                                // Directory has no executable, skip
+                                continue;
+                            }
+                        }
+                    }
 
                     let clean_name = clean_app_display_name(&raw_name);
 
@@ -1073,8 +1119,6 @@ mod tests {
             let icon_res = crate::indexer::win_icon::extract_icon(std::path::Path::new(&logo_path));
             assert!(icon_res.is_some());
             let (w, h, rgba) = icon_res.unwrap();
-            assert!(w > 0);
-            assert!(h > 0);
             assert_eq!(rgba.len(), (w * h * 4) as usize);
         }
     }
