@@ -92,3 +92,23 @@ pub fn draw_sliders_icon(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
     // Bottom slider knob
     painter.circle_filled(Pos2::new(rect.min.x + w * 0.65, y2), stroke.width * 1.5, stroke.color);
 }
+
+/// Draw a modern Lucide-style gear / settings icon
+pub fn draw_gear_icon(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
+    let center = rect.center();
+    let r_outer = (rect.width().min(rect.height())) * 0.42;
+    let r_inner = r_outer * 0.52;
+
+    // Center hole
+    painter.circle_stroke(center, r_inner, stroke);
+
+    // 6 gear cogs
+    for i in 0..6 {
+        let angle = (i as f32) * (std::f32::consts::PI / 3.0);
+        let cos_a = angle.cos();
+        let sin_a = angle.sin();
+        let p_inner = Pos2::new(center.x + r_inner * cos_a, center.y + r_inner * sin_a);
+        let p_outer = Pos2::new(center.x + r_outer * cos_a, center.y + r_outer * sin_a);
+        painter.line_segment([p_inner, p_outer], stroke);
+    }
+}

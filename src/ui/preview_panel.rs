@@ -678,7 +678,7 @@ fn render_application_profile(ui: &mut Ui, file: &FileRecord, icon_cache: &IconC
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let copy_btn = egui::Button::new(
-                            egui::RichText::new("📋 Copy")
+                            egui::RichText::new("Copy")
                                 .size(11.0)
                                 .color(Color32::from_rgb(140, 145, 165)),
                         )
@@ -1041,7 +1041,7 @@ fn render_flat_code_wrapper(ui: &mut Ui, lang: &str, code: &str) {
                             if ui
                                 .add(
                                     egui::Button::new(
-                                        egui::RichText::new("📋 Copy")
+                                        egui::RichText::new("Copy")
                                             .size(11.0)
                                             .color(Color32::from_rgb(200, 205, 220)),
                                     )
@@ -1129,7 +1129,7 @@ fn render_markdown_table(ui: &mut Ui, rows: &[Vec<String>]) {
 fn render_excel_preview(ui: &mut Ui, sheet_names: &[String], first_sheet: &str, rows: &[Vec<String>]) {
     ui.horizontal(|ui| {
         ui.label(
-            egui::RichText::new("📊 Sheet: ")
+            egui::RichText::new("Sheet: ")
                 .size(13.0)
                 .color(Color32::from_rgb(140, 145, 160)),
         );
@@ -1155,7 +1155,7 @@ fn render_excel_preview(ui: &mut Ui, sheet_names: &[String], first_sheet: &str, 
 fn render_csv_preview(ui: &mut Ui, rows: &[Vec<String>], total_rows: usize) {
     ui.label(
         egui::RichText::new(format!(
-            "📊 {} rows previewed",
+            "{} rows previewed",
             total_rows
         ))
         .size(12.0)
@@ -1342,7 +1342,7 @@ fn render_pdf_preview(ui: &mut Ui, path: &str, pdf_renderer: &mut crate::ui::pdf
                         ui.painter().text(
                             rect.center(),
                             egui::Align2::CENTER_CENTER,
-                            "📄 PDF preview requires external viewer",
+                            "PDF preview requires external viewer",
                             egui::FontId::proportional(12.5),
                             Color32::from_rgb(160, 165, 180),
                         );

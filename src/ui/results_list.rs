@@ -70,11 +70,7 @@ pub fn render_results_list(
 
         ui.add_space(top_pad);
         ui.vertical_centered(|ui| {
-            ui.label(
-                egui::RichText::new("🔍")
-                    .size(22.0)
-                    .color(Color32::from_rgb(85, 90, 105)),
-            );
+            crate::ui::icons::draw_search_icon(ui, 26.0, Color32::from_rgb(85, 90, 105));
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new("No files or applications found")

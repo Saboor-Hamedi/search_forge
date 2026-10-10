@@ -35,10 +35,42 @@ mod win_effects {
         fn DwmExtendFrameIntoClientArea(hwnd: HWND, p_mar_inset: *const MARGINS) -> HRESULT;
     }
 
+    const MONITOR_DEFAULTTONEAREST: DWORD = 2;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+
+    #[repr(C)]
+    struct RECT {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+
+    #[repr(C)]
+    struct MONITORINFO {
+        cb_size: DWORD,
+        rc_monitor: RECT,
+        rc_work: RECT,
+        dw_flags: DWORD,
+    }
+
     #[link(name = "user32")]
     extern "system" {
         fn GetWindowLongW(hwnd: HWND, n_index: i32) -> i32;
         fn SetWindowLongW(hwnd: HWND, n_index: i32, dw_new_long: i32) -> i32;
+        fn SetWindowPos(
+            hwnd: HWND,
+            hwnd_insert_after: HWND,
+            x: i32,
+            y: i32,
+            cx: i32,
+            cy: i32,
+            u_flags: u32,
+        ) -> BOOL;
+        fn MonitorFromWindow(hwnd: HWND, dw_flags: DWORD) -> HWND;
+        fn GetMonitorInfoW(h_monitor: HWND, lpmi: *mut MONITORINFO) -> BOOL;
+        fn GetDpiForWindow(hwnd: HWND) -> u32;
     }
 
     pub fn apply_glass_effect(hwnd: HWND, _enable_glass: bool) {
@@ -99,6 +131,45 @@ mod win_effects {
             SetWindowLongW(hwnd, GWL_EXSTYLE, new_style as i32);
         }
     }
+
+    pub fn resize_and_center(hwnd: HWND, logical_width: f32, logical_height: f32) {
+        if hwnd.is_null() {
+            return;
+        }
+        unsafe {
+            // Get DPI scale factor for window (standard is 96 DPI = 1.0)
+            let dpi = GetDpiForWindow(hwnd);
+            let scale = if dpi > 0 { (dpi as f32) / 96.0 } else { 1.0 };
+            let pixel_w = (logical_width * scale).round() as i32;
+            let pixel_h = (logical_height * scale).round() as i32;
+
+            // Get target monitor work area (excludes Windows taskbar, respects multi-monitor)
+            let h_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            let mut mi: MONITORINFO = std::mem::zeroed();
+            mi.cb_size = std::mem::size_of::<MONITORINFO>() as DWORD;
+
+            if !h_monitor.is_null() && GetMonitorInfoW(h_monitor, &mut mi) != 0 {
+                let work_x = mi.rc_work.left;
+                let work_y = mi.rc_work.top;
+                let work_w = mi.rc_work.right - mi.rc_work.left;
+                let work_h = mi.rc_work.bottom - mi.rc_work.top;
+
+                let x = work_x + (work_w - pixel_w) / 2;
+                // Center vertically in work area
+                let y = work_y + (work_h - pixel_h) / 2;
+
+                SetWindowPos(
+                    hwnd,
+                    std::ptr::null_mut(),
+                    x,
+                    y,
+                    pixel_w,
+                    pixel_h,
+                    SWP_NOZORDER | SWP_FRAMECHANGED,
+                );
+            }
+        }
+    }
 }
 
 pub fn apply_native_glass_to_window(enable_glass: bool) {
@@ -124,6 +195,19 @@ pub fn set_window_taskbar_presence(show_in_taskbar: bool) {
     #[cfg(not(target_os = "windows"))]
     {
         let _ = show_in_taskbar;
+    }
+}
+
+pub fn resize_and_center_window(logical_width: f32, logical_height: f32) {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(hwnd) = crate::utils::tray_hotkey::find_searchforge_window() {
+            win_effects::resize_and_center(hwnd, logical_width, logical_height);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (logical_width, logical_height);
     }
 }
 

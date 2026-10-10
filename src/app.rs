@@ -42,6 +42,11 @@ impl SearchForgeApp {
         // Enable inline image rendering in egui
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
+        // Configure system fallback fonts for multilingual support (Arabic, Persian, CJK, Cyrillic, symbols)
+        let mut fonts = egui::FontDefinitions::default();
+        crate::utils::font::setup_multilingual_fonts(&mut fonts);
+        cc.egui_ctx.set_fonts(fonts);
+
         let config = crate::utils::config::AppConfig::load();
 
         // Apply sleek dark / glass theme base visuals
@@ -165,6 +170,7 @@ impl SearchForgeApp {
         self.lifecycle = WindowLifecycle::SpotlightVisible;
         self.suppress_k_frames = 3;
         self.spotlight_focus_grace_frames = 15;
+        crate::utils::window_effects::resize_and_center_window(SPOTLIGHT_SIZE[0], SPOTLIGHT_SIZE[1]);
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::from(SPOTLIGHT_SIZE)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -182,6 +188,7 @@ impl SearchForgeApp {
     pub fn show_full_window(&mut self, ctx: &Context) {
         self.lifecycle = WindowLifecycle::FullWindowVisible;
         self.suppress_k_frames = 3;
+        crate::utils::window_effects::resize_and_center_window(FULL_WINDOW_SIZE[0], FULL_WINDOW_SIZE[1]);
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::from(FULL_WINDOW_SIZE)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -227,6 +234,12 @@ impl App for SearchForgeApp {
                 if let Some(hwnd) = crate::utils::tray_hotkey::find_searchforge_window() {
                     crate::utils::tray_hotkey::hide_searchforge_window(hwnd);
                 }
+            } else if self.lifecycle == WindowLifecycle::SpotlightVisible {
+                crate::utils::window_effects::resize_and_center_window(SPOTLIGHT_SIZE[0], SPOTLIGHT_SIZE[1]);
+                crate::utils::window_effects::set_window_taskbar_presence(false);
+            } else if self.lifecycle == WindowLifecycle::FullWindowVisible {
+                crate::utils::window_effects::resize_and_center_window(FULL_WINDOW_SIZE[0], FULL_WINDOW_SIZE[1]);
+                crate::utils::window_effects::set_window_taskbar_presence(true);
             }
         }
 
@@ -289,6 +302,34 @@ impl App for SearchForgeApp {
                 self.hide_to_tray(ctx);
             } else {
                 self.show_spotlight(ctx);
+            }
+        }
+
+        // Ctrl + Shift + E shortcut: toggle between Spotlight launcher and Full window mode
+        let ctrl_shift_e_pressed = ctx.input_mut(|i| {
+            i.consume_key(
+                egui::Modifiers {
+                    ctrl: true,
+                    shift: true,
+                    ..Default::default()
+                },
+                egui::Key::E,
+            ) || i.consume_key(
+                egui::Modifiers {
+                    command: true,
+                    shift: true,
+                    ..Default::default()
+                },
+                egui::Key::E,
+            )
+        });
+        if ctrl_shift_e_pressed {
+            if self.lifecycle.is_spotlight() {
+                self.show_full_window(ctx);
+            } else if self.lifecycle.is_full() {
+                self.show_spotlight(ctx);
+            } else {
+                self.show_full_window(ctx);
             }
         }
 

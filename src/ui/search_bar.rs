@@ -137,7 +137,7 @@ pub fn render_search_bar(
                     let (spotlight_rect, spotlight_resp) = ui.allocate_exact_size(Vec2::new(76.0, 26.0), egui::Sense::click());
                     let spotlight_resp = spotlight_resp
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text("Switch to compact Spotlight launcher (or press Esc when empty)");
+                        .on_hover_text("Switch to compact Spotlight launcher (Ctrl+Shift+E)");
                     let spotlight_fill = if spotlight_resp.hovered() {
                         Color32::from_rgb(34, 38, 50)
                     } else {

@@ -41,37 +41,33 @@ pub fn render_footer(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
 
-            // Settings / Preferences Gear button (right beside update button)
-            let pref_btn_id = ui.make_persistent_id("footer_preferences_gear_btn");
-            let was_pref_hovered = ui.data(|d| d.get_temp::<bool>(pref_btn_id).unwrap_or(false));
-            let pref_btn = ui.add(
-                egui::Button::new(
-                    egui::RichText::new("⚙")
-                        .size(13.0)
-                        .color(if *open_preferences {
-                            Color32::from_rgb(255, 230, 0)
-                        } else if was_pref_hovered {
-                            Color32::WHITE
-                        } else {
-                            Color32::from_rgb(140, 145, 160)
-                        }),
-                )
-                .fill(if *open_preferences {
-                    Color32::from_rgb(34, 38, 48)
-                } else if was_pref_hovered {
-                    Color32::from_rgb(26, 28, 36)
-                } else {
-                    Color32::TRANSPARENT
-                })
-                .stroke(Stroke::NONE)
-                .rounding(Rounding::same(4.0))
-                .min_size(Vec2::new(22.0, 22.0)),
-            )
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text("Preferences: Startup & Spotlight settings");
+            // Settings / Preferences Gear button with vector icon
+            let (pref_rect, pref_btn) = ui.allocate_exact_size(Vec2::new(24.0, 24.0), egui::Sense::click());
+            let pref_btn = pref_btn
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Preferences: Startup & Spotlight settings");
 
-            let pref_rect = pref_btn.rect;
-            ui.data_mut(|d| d.insert_temp(pref_btn_id, pref_btn.hovered()));
+            let pref_fill = if *open_preferences {
+                Color32::from_rgb(34, 38, 48)
+            } else if pref_btn.hovered() {
+                Color32::from_rgb(26, 28, 36)
+            } else {
+                Color32::TRANSPARENT
+            };
+            if pref_fill != Color32::TRANSPARENT {
+                ui.painter().rect_filled(pref_rect, Rounding::same(4.0), pref_fill);
+            }
+
+            let gear_col = if *open_preferences {
+                Color32::from_rgb(255, 230, 0)
+            } else if pref_btn.hovered() {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(140, 145, 160)
+            };
+            let gear_rect = Rect::from_center_size(pref_rect.center(), Vec2::splat(12.0));
+            crate::ui::icons::draw_gear_icon(ui.painter(), gear_rect, Stroke::new(1.2, gear_col));
+
             if pref_btn.clicked() {
                 *open_preferences = !*open_preferences;
             }

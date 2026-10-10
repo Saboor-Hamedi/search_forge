@@ -137,7 +137,7 @@ pub fn render_spotlight_search_bar(
                     // Expand to Full SearchForge window button with crisp vector icon
                     let (btn_rect, expand_resp) = ui.allocate_exact_size(Vec2::new(56.0, 24.0), egui::Sense::click());
                     let expand_resp = expand_resp.on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text("Open Full SearchForge with file previews and filters");
+                        .on_hover_text("Open Full SearchForge with file previews (Ctrl+Shift+E)");
                     let btn_fill = if expand_resp.hovered() {
                         Color32::from_rgb(40, 44, 58)
                     } else {
