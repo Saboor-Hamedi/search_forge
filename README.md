@@ -1,13 +1,9 @@
-import pypandoc
-from pathlib import Path
-
-readme = r"""# SearchForge
 <p align="center">
-![Spotlight]("./banner/spotlight.png")
+  <img src="banner/spotlight.png" alt="SearchForge Spotlight Search" width="760" />
 </p>
 <p align="center">
-![Spotlight]("./banner/fullapp.png")
-</p
+  <img src="banner/fullapp.png" alt="SearchForge Full Window Mode" width="760" />
+</p>
 
 
 
