@@ -3,7 +3,8 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayEvent {
-    Show,
+    ShowSpotlight,
+    ShowFull,
     Hide,
     Quit,
 }
@@ -226,7 +227,9 @@ unsafe fn run_win32_tray_and_hotkey(sender: Sender<TrayEvent>, ctx: Context) {
     ) != 0;
 
     if !hotkey_registered {
-        eprintln!("Warning: Could not register global Alt+K hotkey (may already be in use by another app)");
+        // Alt+K may be owned by another instance or reserved by another application.
+        // In-app Alt+K and the System Tray icon still function fully.
+        eprintln!("[Info] Global Alt+K hotkey is in use by another instance or application. Tray icon and in-app shortcuts remain active.");
     }
 
     // Load application icon from embedded icon resource
@@ -307,6 +310,8 @@ unsafe extern "system" fn tray_window_proc(
             let cmd_id = (w_param & 0xFFFF) as usize;
             if cmd_id == win32::MENU_ID_OPEN {
                 show_searchforge();
+            } else if cmd_id == win32::MENU_ID_OPEN_FULL {
+                show_full_searchforge();
             } else if cmd_id == win32::MENU_ID_QUIT {
                 if let Some(ref state) = GLOBAL_TRAY_STATE {
                     let _ = state.sender.send(TrayEvent::Quit);
@@ -336,7 +341,7 @@ unsafe fn toggle_searchforge() {
         }
     }
 
-    // Otherwise, pop up and focus SearchForge
+    // Otherwise, pop up and focus SearchForge Spotlight
     show_searchforge();
 }
 
@@ -344,10 +349,25 @@ unsafe fn toggle_searchforge() {
 pub unsafe fn show_searchforge() {
     if let Some(ref mut state) = GLOBAL_TRAY_STATE {
         state.is_visible = true;
-        let _ = state.sender.send(TrayEvent::Show);
+        let _ = state.sender.send(TrayEvent::ShowSpotlight);
         state.ctx.request_repaint();
     }
-    // Directly restore and activate the HWND so winit processes the wakeup immediately
+    if let Some(hwnd) = find_searchforge_window() {
+        win32::ShowWindow(hwnd, win32::SW_RESTORE);
+        win32::ShowWindow(hwnd, win32::SW_SHOW);
+        win32::SetForegroundWindow(hwnd);
+        win32::BringWindowToTop(hwnd);
+        win32::SetFocus(hwnd);
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub unsafe fn show_full_searchforge() {
+    if let Some(ref mut state) = GLOBAL_TRAY_STATE {
+        state.is_visible = true;
+        let _ = state.sender.send(TrayEvent::ShowFull);
+        state.ctx.request_repaint();
+    }
     if let Some(hwnd) = find_searchforge_window() {
         win32::ShowWindow(hwnd, win32::SW_RESTORE);
         win32::ShowWindow(hwnd, win32::SW_SHOW);
@@ -378,7 +398,11 @@ unsafe fn show_tray_context_menu(hwnd: win32::HWND) {
         return;
     }
 
-    let open_text: Vec<u16> = std::ffi::OsStr::new("Open SearchForge (Alt+K)")
+    let open_spotlight_text: Vec<u16> = std::ffi::OsStr::new("Open Spotlight (Alt+K)")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let open_full_text: Vec<u16> = std::ffi::OsStr::new("Open Full SearchForge")
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
@@ -387,7 +411,8 @@ unsafe fn show_tray_context_menu(hwnd: win32::HWND) {
         .chain(std::iter::once(0))
         .collect();
 
-    win32::AppendMenuW(h_menu, 0, win32::MENU_ID_OPEN, open_text.as_ptr());
+    win32::AppendMenuW(h_menu, 0, win32::MENU_ID_OPEN, open_spotlight_text.as_ptr());
+    win32::AppendMenuW(h_menu, 0, win32::MENU_ID_OPEN_FULL, open_full_text.as_ptr());
     win32::AppendMenuW(h_menu, win32::MF_SEPARATOR, 0, std::ptr::null());
     win32::AppendMenuW(h_menu, 0, win32::MENU_ID_QUIT, quit_text.as_ptr());
 
@@ -437,7 +462,8 @@ pub mod win32 {
 
     pub const HOTKEY_ID_ALT_K: i32 = 1001;
     pub const MENU_ID_OPEN: usize = 2001;
-    pub const MENU_ID_QUIT: usize = 2002;
+    pub const MENU_ID_OPEN_FULL: usize = 2002;
+    pub const MENU_ID_QUIT: usize = 2003;
 
     pub const MOD_ALT: UINT = 0x0001;
     pub const MOD_NOREPEAT: UINT = 0x4000;

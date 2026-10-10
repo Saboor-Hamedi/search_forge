@@ -2,11 +2,25 @@ use std::path::PathBuf;
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThemeMode {
+    Dark,
+    Glass,
+}
+
+impl Default for ThemeMode {
+    fn default() -> Self {
+        Self::Glass
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub autostart: bool,
     pub hide_on_close: bool,
     pub spotlight_mode: bool,
+    #[serde(default)]
+    pub theme: ThemeMode,
 }
 
 impl Default for AppConfig {
@@ -14,7 +28,8 @@ impl Default for AppConfig {
         Self {
             autostart: true,
             hide_on_close: true,
-            spotlight_mode: true, // Spotlight mode on by default
+            spotlight_mode: true,
+            theme: ThemeMode::Glass,
         }
     }
 }
@@ -49,6 +64,7 @@ impl AppConfig {
         }
     }
 
+    #[allow(dead_code)]
     pub fn set_spotlight_mode(&mut self, enable: bool) {
         self.spotlight_mode = enable;
         self.autostart = enable;
@@ -57,11 +73,15 @@ impl AppConfig {
         Self::sync_system_autostart(enable);
     }
 
-    #[allow(dead_code)]
     pub fn set_autostart(&mut self, enable: bool) {
         self.autostart = enable;
         self.save();
         Self::sync_system_autostart(enable);
+    }
+
+    pub fn set_theme(&mut self, theme: ThemeMode) {
+        self.theme = theme;
+        self.save();
     }
 
     #[allow(dead_code)]
@@ -73,22 +93,37 @@ impl AppConfig {
     pub fn sync_system_autostart(enable: bool) {
         #[cfg(target_os = "windows")]
         {
-            use std::os::windows::process::CommandExt;
             if let Ok(exe_path) = std::env::current_exe() {
                 let exe_str = exe_path.to_string_lossy().to_string();
                 if enable {
-                    let cmd = format!(
-                        "Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'SearchForge' -Value '\"{}\"'",
-                        exe_str
-                    );
-                    let _ = std::process::Command::new("powershell")
-                        .args(["-NoProfile", "-Command", &cmd])
+                    // Register with explicit --autostart flag so SearchForge starts minimized/hidden
+                    // Using cmd.exe reg add handles spaces, quotes, and doesn't depend on PowerShell scripts
+                    let reg_val = format!("\"{}\" --autostart", exe_str);
+                    use std::os::windows::process::CommandExt;
+                    let _ = std::process::Command::new("reg")
+                        .args([
+                            "add",
+                            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                            "/v",
+                            "SearchForge",
+                            "/t",
+                            "REG_SZ",
+                            "/d",
+                            &reg_val,
+                            "/f",
+                        ])
                         .creation_flags(0x08000000) // CREATE_NO_WINDOW
                         .output();
                 } else {
-                    let cmd = "Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'SearchForge' -ErrorAction SilentlyContinue";
-                    let _ = std::process::Command::new("powershell")
-                        .args(["-NoProfile", "-Command", cmd])
+                    use std::os::windows::process::CommandExt;
+                    let _ = std::process::Command::new("reg")
+                        .args([
+                            "delete",
+                            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                            "/v",
+                            "SearchForge",
+                            "/f",
+                        ])
                         .creation_flags(0x08000000) // CREATE_NO_WINDOW
                         .output();
                 }

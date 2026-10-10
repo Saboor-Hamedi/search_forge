@@ -39,7 +39,7 @@ pub fn file_badge_info(name: &str, is_dir: bool) -> (&'static str, Color32) {
 }
 
 /// Generates a clean 2-letter monogram for fallback application icons
-fn app_initials(name: &str) -> String {
+pub(crate) fn app_initials(name: &str) -> String {
     let words: Vec<&str> = name.split_whitespace().collect();
     if words.len() >= 2 {
         let first = words[0].chars().next().unwrap_or('A').to_ascii_uppercase();

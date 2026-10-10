@@ -1,4 +1,4 @@
-use egui::{Color32, Frame, Margin, Pos2, Rounding, Stroke, Ui, Vec2};
+use egui::{Color32, Frame, Margin, Pos2, Rect, Rounding, Stroke, Ui, Vec2};
 
 pub fn render_search_bar(
     ui: &mut Ui,
@@ -7,6 +7,7 @@ pub fn render_search_bar(
     _result_count: usize,
     top_suggestion: Option<&str>,
     _hide_on_close: bool,
+    return_to_spotlight: &mut bool,
 ) {
     let input_id = egui::Id::new("main_search_text_edit");
 
@@ -37,15 +38,11 @@ pub fn render_search_bar(
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
 
-                // 1. Search Icon (size 17.0px)
-                ui.label(
-                    egui::RichText::new("🔍")
-                        .size(17.0)
-                        .color(Color32::from_rgb(160, 165, 180)),
-                );
+                // 1. Vector Search Icon (size 17.0px)
+                crate::ui::icons::draw_search_icon(ui, 17.0, Color32::from_rgb(160, 165, 180));
 
-                // Right side controls reserve width: Filter (~66px) + Gap (12.0px) + Close (26px) + Separation gap (16px) = ~120px
-                let right_controls_width = 125.0;
+                // Right side controls reserve width: Spotlight (~82px) + Filter (~72px) + Close (26px) + gaps = ~205px
+                let right_controls_width = 205.0;
                 let text_width = (ui.available_width() - right_controls_width).max(120.0);
 
                 // 2. Large, borderless, clean search input (+2px font size: 17.0px)
@@ -103,7 +100,7 @@ pub fn render_search_bar(
 
                 // 3. Right side controls: cleanly positioned on right with ample gap, flat styling
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 10.0;
+                    ui.spacing_mut().item_spacing.x = 8.0;
 
                     // Close button (×) - Flat neobrutalist icon button
                     let (close_rect, close_resp) = ui.allocate_exact_size(Vec2::new(26.0, 26.0), egui::Sense::click());
@@ -125,21 +122,7 @@ pub fn render_search_bar(
                         ui.painter().rect_filled(close_rect, Rounding::same(4.0), close_bg);
                     }
 
-                    let pad = 8.0;
-                    ui.painter().line_segment(
-                        [
-                            Pos2::new(close_rect.min.x + pad, close_rect.min.y + pad),
-                            Pos2::new(close_rect.max.x - pad, close_rect.max.y - pad),
-                        ],
-                        Stroke::new(1.4, stroke_col),
-                    );
-                    ui.painter().line_segment(
-                        [
-                            Pos2::new(close_rect.min.x + pad, close_rect.max.y - pad),
-                            Pos2::new(close_rect.max.x - pad, close_rect.min.y + pad),
-                        ],
-                        Stroke::new(1.4, stroke_col),
-                    );
+                    crate::ui::icons::draw_close_icon(ui.painter(), close_rect, Stroke::new(1.4, stroke_col));
 
                     if close_resp.on_hover_text("Close to tray (Alt+K to open)").clicked() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -150,44 +133,73 @@ pub fn render_search_bar(
                         }
                     }
 
-                    // Filter toggle button (⚙ Filter) - Flat styling with hover background matching file row
-                    let filter_btn_id = ui.make_persistent_id("filter_toggle_btn");
-                    let was_filter_hovered = ui.data(|d| d.get_temp::<bool>(filter_btn_id).unwrap_or(false));
-
-                    let filter_btn_text = if *open_settings {
-                        egui::RichText::new("⚙ Filter")
-                            .size(13.0)
-                            .strong()
-                            .color(Color32::from_rgb(255, 230, 0))
-                    } else if was_filter_hovered {
-                        egui::RichText::new("⚙ Filter")
-                            .size(13.0)
-                            .color(Color32::WHITE)
+                    // Spotlight launcher toggle button - Returns cleanly to compact launcher mode
+                    let (spotlight_rect, spotlight_resp) = ui.allocate_exact_size(Vec2::new(76.0, 26.0), egui::Sense::click());
+                    let spotlight_resp = spotlight_resp
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text("Switch to compact Spotlight launcher (or press Esc when empty)");
+                    let spotlight_fill = if spotlight_resp.hovered() {
+                        Color32::from_rgb(34, 38, 50)
                     } else {
-                        egui::RichText::new("⚙ Filter")
-                            .size(13.0)
-                            .color(Color32::from_rgb(160, 165, 180))
+                        Color32::from_rgb(26, 29, 38)
                     };
+                    ui.painter().rect_filled(spotlight_rect, Rounding::same(4.0), spotlight_fill);
 
-                    let filter_fill = if *open_settings {
-                        Color32::from_rgb(32, 35, 46)
-                    } else if was_filter_hovered {
-                        Color32::from_rgb(26, 28, 36) // Same hover background as file rows on left side
-                    } else {
-                        Color32::TRANSPARENT // Flat
-                    };
+                    let spotlight_col = if spotlight_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(175, 180, 195) };
+                    let spotlight_icon_rect = Rect::from_center_size(
+                        Pos2::new(spotlight_rect.min.x + 13.0, spotlight_rect.center().y),
+                        Vec2::splat(10.0),
+                    );
+                    crate::ui::icons::draw_expand_icon(ui.painter(), spotlight_icon_rect, Stroke::new(1.2, spotlight_col));
+                    ui.painter().text(
+                        Pos2::new(spotlight_rect.min.x + 25.0, spotlight_rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        "Spotlight",
+                        egui::FontId::proportional(12.0),
+                        spotlight_col,
+                    );
 
-                    let filter_btn = egui::Button::new(filter_btn_text)
-                        .fill(filter_fill)
-                        .stroke(Stroke::NONE) // Flat: no border stroke
-                        .rounding(Rounding::same(4.0))
-                        .min_size(Vec2::new(64.0, 26.0));
+                    if spotlight_resp.clicked() {
+                        *return_to_spotlight = true;
+                    }
 
-                    let filter_resp = ui.add(filter_btn)
+                    // Filter toggle button with vector sliders icon
+                    let (filter_rect, filter_resp) = ui.allocate_exact_size(Vec2::new(64.0, 26.0), egui::Sense::click());
+                    let filter_resp = filter_resp
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .on_hover_text("Configure folder filters & exclusions");
 
-                    ui.data_mut(|d| d.insert_temp(filter_btn_id, filter_resp.hovered()));
+                    let filter_fill = if *open_settings {
+                        Color32::from_rgb(34, 38, 52)
+                    } else if filter_resp.hovered() {
+                        Color32::from_rgb(26, 28, 36)
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    if filter_fill != Color32::TRANSPARENT {
+                        ui.painter().rect_filled(filter_rect, Rounding::same(4.0), filter_fill);
+                    }
+
+                    let filter_col = if *open_settings {
+                        Color32::from_rgb(255, 230, 0)
+                    } else if filter_resp.hovered() {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_rgb(160, 165, 180)
+                    };
+
+                    let filter_icon_rect = Rect::from_center_size(
+                        Pos2::new(filter_rect.min.x + 12.0, filter_rect.center().y),
+                        Vec2::splat(11.0),
+                    );
+                    crate::ui::icons::draw_sliders_icon(ui.painter(), filter_icon_rect, Stroke::new(1.2, filter_col));
+                    ui.painter().text(
+                        Pos2::new(filter_rect.min.x + 23.0, filter_rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        "Filter",
+                        egui::FontId::proportional(12.5),
+                        filter_col,
+                    );
 
                     if filter_resp.clicked() {
                         *open_settings = !*open_settings;

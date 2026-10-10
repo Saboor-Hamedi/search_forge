@@ -58,7 +58,7 @@ pub fn render_settings_menu(
     }
 
     let menu_width = 280.0;
-    let menu_height = 186.0;
+    let menu_height = 224.0;
 
     // Position pop-up menu sleekly above the button on the right
     let menu_pos = Pos2::new(
@@ -114,26 +114,61 @@ pub fn render_settings_menu(
                     ui.separator();
                     ui.add_space(8.0);
 
-                    // Unified Primary Toggle: Spotlight Mode (Start on Boot + Hide to Tray)
+                    // 1. Primary Toggle: Autostart on Boot
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
                             ui.label(
-                                egui::RichText::new("Spotlight Mode")
+                                egui::RichText::new("Start on Login")
                                     .size(12.5)
                                     .strong()
                                     .color(Color32::WHITE),
                             );
                             ui.label(
-                                egui::RichText::new("Open on startup & hide in tray")
+                                egui::RichText::new("Launch SearchForge automatically")
                                     .size(11.0)
                                     .color(Color32::from_rgb(130, 135, 150)),
                             );
                         });
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let mut spotlight_enabled = config.spotlight_mode;
-                            if render_toggle_switch(ui, &mut spotlight_enabled) {
-                                config.set_spotlight_mode(spotlight_enabled);
+                            let mut autostart_enabled = config.autostart;
+                            if render_toggle_switch(ui, &mut autostart_enabled) {
+                                config.set_autostart(autostart_enabled);
+                            }
+                        });
+                    });
+
+                    ui.add_space(8.0);
+
+                    // 2. Appearance Theme: Translucent Glass vs Classic Dark
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new("Theme Appearance")
+                                    .size(12.5)
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            );
+                            ui.label(
+                                egui::RichText::new(match config.theme {
+                                    crate::utils::config::ThemeMode::Glass => "Translucent Acrylic Glass",
+                                    crate::utils::config::ThemeMode::Dark => "Classic Dark Solid",
+                                })
+                                .size(11.0)
+                                .color(Color32::from_rgb(130, 135, 150)),
+                            );
+                        });
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let mut is_glass = config.theme == crate::utils::config::ThemeMode::Glass;
+                            if render_toggle_switch(ui, &mut is_glass) {
+                                let new_theme = if is_glass {
+                                    crate::utils::config::ThemeMode::Glass
+                                } else {
+                                    crate::utils::config::ThemeMode::Dark
+                                };
+                                config.set_theme(new_theme);
+                                crate::utils::window_effects::apply_native_glass_to_window(is_glass);
                             }
                         });
                     });
@@ -149,12 +184,12 @@ pub fn render_settings_menu(
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(
-                                    egui::RichText::new("Shortcut:")
+                                    egui::RichText::new("Spotlight Shortcut:")
                                         .size(11.0)
                                         .color(Color32::from_rgb(140, 145, 160)),
                                 );
                                 ui.label(
-                                    egui::RichText::new("Alt + K  /  Ctrl + K")
+                                    egui::RichText::new("Alt + K")
                                         .size(11.0)
                                         .strong()
                                         .color(Color32::from_rgb(255, 230, 0)),
