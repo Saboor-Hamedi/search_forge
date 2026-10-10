@@ -35,6 +35,7 @@ pub struct SearchForgeApp {
     suppress_k_frames: u8,
     applied_theme_init: bool,
     spotlight_focus_grace_frames: u8,
+    spotlight_has_focused: bool,
 }
 
 impl SearchForgeApp {
@@ -131,7 +132,8 @@ impl SearchForgeApp {
             preview_cache: crate::ui::preview_panel::PreviewCache::new(),
             suppress_k_frames: 0,
             applied_theme_init: false,
-            spotlight_focus_grace_frames: 15,
+            spotlight_focus_grace_frames: 30,
+            spotlight_has_focused: false,
         }
     }
 
@@ -169,11 +171,11 @@ impl SearchForgeApp {
     pub fn show_spotlight(&mut self, ctx: &Context) {
         self.lifecycle = WindowLifecycle::SpotlightVisible;
         self.suppress_k_frames = 3;
-        self.spotlight_focus_grace_frames = 15;
+        self.spotlight_has_focused = false;
+        self.spotlight_focus_grace_frames = 30;
         crate::utils::window_effects::resize_and_center_window(SPOTLIGHT_SIZE[0], SPOTLIGHT_SIZE[1]);
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::from(SPOTLIGHT_SIZE)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         ctx.request_repaint();
 
@@ -191,7 +193,6 @@ impl SearchForgeApp {
         crate::utils::window_effects::resize_and_center_window(FULL_WINDOW_SIZE[0], FULL_WINDOW_SIZE[1]);
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::from(FULL_WINDOW_SIZE)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         ctx.request_repaint();
 
@@ -207,8 +208,8 @@ impl SearchForgeApp {
         self.lifecycle = WindowLifecycle::Hidden;
         self.open_settings = false;
         self.open_preferences = false;
+        self.spotlight_has_focused = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         ctx.request_repaint();
 
         #[cfg(target_os = "windows")]
@@ -229,7 +230,6 @@ impl App for SearchForgeApp {
             // If initial mode is Hidden (launched on startup), ensure window stays hidden
             if self.lifecycle == WindowLifecycle::Hidden {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                 #[cfg(target_os = "windows")]
                 if let Some(hwnd) = crate::utils::tray_hotkey::find_searchforge_window() {
                     crate::utils::tray_hotkey::hide_searchforge_window(hwnd);
@@ -282,11 +282,18 @@ impl App for SearchForgeApp {
 
         // Spotlight auto-dismiss on focus lost (exact PowerToys Run behavior)
         if self.lifecycle.is_spotlight() {
-            if self.spotlight_focus_grace_frames > 0 {
-                self.spotlight_focus_grace_frames -= 1;
-            } else {
-                let is_focused = crate::utils::window_effects::is_searchforge_focused();
-                if !is_focused {
+            let is_focused = crate::utils::window_effects::is_searchforge_focused()
+                || ctx.input(|i| i.viewport().focused.unwrap_or(false));
+
+            if is_focused {
+                // Confirm that Spotlight has successfully gained focus
+                self.spotlight_has_focused = true;
+                self.spotlight_focus_grace_frames = 15;
+            } else if self.spotlight_has_focused {
+                // Only dismiss once Spotlight has gained focus and then subsequently lost it
+                if self.spotlight_focus_grace_frames > 0 {
+                    self.spotlight_focus_grace_frames -= 1;
+                } else {
                     // User switched to another app or clicked outside -> cleanly dismiss Spotlight to tray
                     self.search_query.clear();
                     self.selected_index = None;
@@ -295,13 +302,11 @@ impl App for SearchForgeApp {
             }
         }
 
-        // In-app Alt + K shortcut: toggles between visible and hidden
+        // In-app Alt + K shortcut: if pressed when already open and not suppressed, toggle closed to tray
         let alt_k_pressed = ctx.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::K));
-        if alt_k_pressed {
+        if alt_k_pressed && self.suppress_k_frames == 0 {
             if self.lifecycle.is_visible() {
                 self.hide_to_tray(ctx);
-            } else {
-                self.show_spotlight(ctx);
             }
         }
 

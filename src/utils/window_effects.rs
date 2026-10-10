@@ -217,7 +217,16 @@ pub fn is_searchforge_focused() -> bool {
         if let Some(hwnd) = crate::utils::tray_hotkey::find_searchforge_window() {
             unsafe {
                 let fg = crate::utils::tray_hotkey::win32::GetForegroundWindow();
-                return fg == hwnd;
+                if fg.is_null() {
+                    return false;
+                }
+                if fg == hwnd {
+                    return true;
+                }
+                let mut fg_pid: u32 = 0;
+                crate::utils::tray_hotkey::win32::GetWindowThreadProcessId(fg, &mut fg_pid);
+                let our_pid = crate::utils::tray_hotkey::win32::GetCurrentProcessId();
+                return fg_pid != 0 && fg_pid == our_pid;
             }
         }
         false

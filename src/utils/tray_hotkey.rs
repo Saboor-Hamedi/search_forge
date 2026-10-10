@@ -42,15 +42,38 @@ pub fn find_searchforge_window() -> Option<win32::HWND> {
 
 #[cfg(target_os = "windows")]
 pub fn bring_window_to_foreground(hwnd: win32::HWND) {
+    if hwnd.is_null() {
+        return;
+    }
     unsafe {
         if let Some(ref mut state) = GLOBAL_TRAY_STATE {
             state.is_visible = true;
         }
-        win32::ShowWindow(hwnd, win32::SW_RESTORE);
+
+        // Show window directly (SW_SHOW) without any restore animation
         win32::ShowWindow(hwnd, win32::SW_SHOW);
-        win32::SetForegroundWindow(hwnd);
-        win32::BringWindowToTop(hwnd);
-        win32::SetFocus(hwnd);
+
+        // Attach thread input so Windows unconditionally transfers foreground focus
+        let cur_fg = win32::GetForegroundWindow();
+        if !cur_fg.is_null() && cur_fg != hwnd {
+            let cur_thread = win32::GetWindowThreadProcessId(cur_fg, std::ptr::null_mut());
+            let our_thread = win32::GetCurrentThreadId();
+            if cur_thread != our_thread && cur_thread != 0 {
+                win32::AttachThreadInput(our_thread, cur_thread, 1);
+                win32::SetForegroundWindow(hwnd);
+                win32::BringWindowToTop(hwnd);
+                win32::SetFocus(hwnd);
+                win32::AttachThreadInput(our_thread, cur_thread, 0);
+            } else {
+                win32::SetForegroundWindow(hwnd);
+                win32::BringWindowToTop(hwnd);
+                win32::SetFocus(hwnd);
+            }
+        } else {
+            win32::SetForegroundWindow(hwnd);
+            win32::BringWindowToTop(hwnd);
+            win32::SetFocus(hwnd);
+        }
     }
 }
 
@@ -331,14 +354,21 @@ unsafe extern "system" fn tray_window_proc(
 
 #[cfg(target_os = "windows")]
 unsafe fn toggle_searchforge() {
-    let main_hwnd_opt = find_searchforge_window();
-    if let Some(hwnd) = main_hwnd_opt {
-        let is_visible = win32::IsWindowVisible(hwnd) != 0;
-        let fg = win32::GetForegroundWindow();
-        if is_visible && fg == hwnd {
+    let is_currently_visible = if let Some(ref state) = GLOBAL_TRAY_STATE {
+        state.is_visible
+    } else {
+        false
+    };
+
+    if let Some(hwnd) = find_searchforge_window() {
+        let os_visible = win32::IsWindowVisible(hwnd) != 0;
+        if os_visible || is_currently_visible {
             hide_searchforge();
             return;
         }
+    } else if is_currently_visible {
+        hide_searchforge();
+        return;
     }
 
     // Otherwise, pop up and focus SearchForge Spotlight
@@ -353,11 +383,9 @@ pub unsafe fn show_searchforge() {
         state.ctx.request_repaint();
     }
     if let Some(hwnd) = find_searchforge_window() {
-        win32::ShowWindow(hwnd, win32::SW_RESTORE);
-        win32::ShowWindow(hwnd, win32::SW_SHOW);
-        win32::SetForegroundWindow(hwnd);
-        win32::BringWindowToTop(hwnd);
-        win32::SetFocus(hwnd);
+        crate::utils::window_effects::resize_and_center_window(680.0, 420.0);
+        crate::utils::window_effects::set_window_taskbar_presence(false);
+        bring_window_to_foreground(hwnd);
     }
 }
 
@@ -369,11 +397,9 @@ pub unsafe fn show_full_searchforge() {
         state.ctx.request_repaint();
     }
     if let Some(hwnd) = find_searchforge_window() {
-        win32::ShowWindow(hwnd, win32::SW_RESTORE);
-        win32::ShowWindow(hwnd, win32::SW_SHOW);
-        win32::SetForegroundWindow(hwnd);
-        win32::BringWindowToTop(hwnd);
-        win32::SetFocus(hwnd);
+        crate::utils::window_effects::resize_and_center_window(840.0, 520.0);
+        crate::utils::window_effects::set_window_taskbar_presence(true);
+        bring_window_to_foreground(hwnd);
     }
 }
 
@@ -480,6 +506,7 @@ pub mod win32 {
 
     pub const SW_HIDE: i32 = 0;
     pub const SW_SHOW: i32 = 5;
+    #[allow(dead_code)]
     pub const SW_RESTORE: i32 = 9;
 
     pub const TPM_RIGHTBUTTON: UINT = 0x0002;
@@ -595,6 +622,8 @@ pub mod win32 {
         pub fn GetModuleHandleW(lp_module_name: *const u16) -> HINSTANCE;
         #[allow(dead_code)]
         pub fn GetCurrentThreadId() -> DWORD;
+        #[allow(dead_code)]
+        pub fn GetCurrentProcessId() -> DWORD;
     }
 
     #[link(name = "shell32")]

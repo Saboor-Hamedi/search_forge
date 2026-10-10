@@ -9,6 +9,7 @@ pub enum WindowLifecycle {
 }
 
 impl WindowLifecycle {
+    #[allow(dead_code)]
     pub fn is_visible(&self) -> bool {
         matches!(self, Self::SpotlightVisible | Self::FullWindowVisible)
     }

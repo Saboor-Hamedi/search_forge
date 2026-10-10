@@ -126,7 +126,6 @@ pub fn render_search_bar(
 
                     if close_resp.on_hover_text("Close to tray (Alt+K to open)").clicked() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         #[cfg(target_os = "windows")]
                         unsafe {
                             crate::utils::tray_hotkey::hide_searchforge();
