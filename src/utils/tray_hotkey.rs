@@ -14,14 +14,45 @@ pub struct TrayHotkeyManager {
 }
 
 impl TrayHotkeyManager {
-    pub fn new(ctx: Context) -> Self {
+    pub fn new(ctx: Context, initial_visible: bool) -> Self {
         let (tx, rx) = channel();
-        start_tray_and_hotkey_listener(tx, ctx);
+        start_tray_and_hotkey_listener(tx, ctx, initial_visible);
         Self { receiver: rx }
     }
 
     pub fn try_recv(&self) -> Option<TrayEvent> {
         self.receiver.try_recv().ok()
+    }
+}
+
+pub fn notify_existing_instance(show_spotlight: bool) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let class_name: Vec<u16> = std::ffi::OsStr::new("SearchForgeTrayMsgClass")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            let existing_tray = win32::FindWindowW(class_name.as_ptr(), std::ptr::null());
+            if !existing_tray.is_null() {
+                if show_spotlight {
+                    win32::PostMessageW(
+                        existing_tray,
+                        win32::WM_COMMAND,
+                        win32::MENU_ID_OPEN,
+                        0,
+                    );
+                }
+                return true;
+            }
+        }
+        false
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = show_spotlight;
+        false
     }
 }
 
@@ -88,18 +119,16 @@ pub fn hide_searchforge_window(hwnd: win32::HWND) {
 }
 
 #[cfg(target_os = "windows")]
-fn start_tray_and_hotkey_listener(sender: Sender<TrayEvent>, ctx: Context) {
+fn start_tray_and_hotkey_listener(sender: Sender<TrayEvent>, ctx: Context, initial_visible: bool) {
     std::thread::Builder::new()
         .name("tray_hotkey_worker".to_string())
         .spawn(move || {
             unsafe {
-                run_win32_tray_and_hotkey(sender, ctx);
+                run_win32_tray_and_hotkey(sender, ctx, initial_visible);
             }
         })
         .ok();
 }
-
-#[cfg(target_os = "windows")]
 #[cfg(target_os = "windows")]
 fn load_tray_hicon() -> win32::HICON {
     let ico_bytes = include_bytes!("../assets/icons/image.ico");
@@ -185,7 +214,7 @@ fn load_tray_hicon() -> win32::HICON {
 }
 
 #[cfg(target_os = "windows")]
-unsafe fn run_win32_tray_and_hotkey(sender: Sender<TrayEvent>, ctx: Context) {
+unsafe fn run_win32_tray_and_hotkey(sender: Sender<TrayEvent>, ctx: Context, initial_visible: bool) {
     use std::os::windows::ffi::OsStrExt;
 
     let class_name: Vec<u16> = std::ffi::OsStr::new("SearchForgeTrayMsgClass")
@@ -233,11 +262,11 @@ unsafe fn run_win32_tray_and_hotkey(sender: Sender<TrayEvent>, ctx: Context) {
         sender: sender.clone(),
         ctx: ctx.clone(),
         tray_hwnd: hwnd,
-        is_visible: true,
+        is_visible: initial_visible,
     });
 
     // Register Alt + K as system-wide global hotkey
-    let hotkey_registered = win32::RegisterHotKey(
+    let _hotkey_registered = win32::RegisterHotKey(
         hwnd,
         win32::HOTKEY_ID_ALT_K,
         win32::MOD_ALT | win32::MOD_NOREPEAT,
@@ -248,12 +277,6 @@ unsafe fn run_win32_tray_and_hotkey(sender: Sender<TrayEvent>, ctx: Context) {
         win32::MOD_ALT,
         win32::VK_K,
     ) != 0;
-
-    if !hotkey_registered {
-        // Alt+K may be owned by another instance or reserved by another application.
-        // In-app Alt+K and the System Tray icon still function fully.
-        eprintln!("[Info] Global Alt+K hotkey is in use by another instance or application. Tray icon and in-app shortcuts remain active.");
-    }
 
     // Load application icon from embedded icon resource
     let h_icon = load_tray_hicon();
@@ -354,25 +377,27 @@ unsafe extern "system" fn tray_window_proc(
 
 #[cfg(target_os = "windows")]
 unsafe fn toggle_searchforge() {
+    if let Some(hwnd) = find_searchforge_window() {
+        let os_visible = win32::IsWindowVisible(hwnd) != 0;
+        if os_visible {
+            hide_searchforge();
+        } else {
+            show_searchforge();
+        }
+        return;
+    }
+
     let is_currently_visible = if let Some(ref state) = GLOBAL_TRAY_STATE {
         state.is_visible
     } else {
         false
     };
 
-    if let Some(hwnd) = find_searchforge_window() {
-        let os_visible = win32::IsWindowVisible(hwnd) != 0;
-        if os_visible || is_currently_visible {
-            hide_searchforge();
-            return;
-        }
-    } else if is_currently_visible {
+    if is_currently_visible {
         hide_searchforge();
-        return;
+    } else {
+        show_searchforge();
     }
-
-    // Otherwise, pop up and focus SearchForge Spotlight
-    show_searchforge();
 }
 
 #[cfg(target_os = "windows")]
@@ -380,12 +405,14 @@ pub unsafe fn show_searchforge() {
     if let Some(ref mut state) = GLOBAL_TRAY_STATE {
         state.is_visible = true;
         let _ = state.sender.send(TrayEvent::ShowSpotlight);
-        state.ctx.request_repaint();
     }
     if let Some(hwnd) = find_searchforge_window() {
         crate::utils::window_effects::resize_and_center_window(680.0, 420.0);
         crate::utils::window_effects::set_window_taskbar_presence(false);
         bring_window_to_foreground(hwnd);
+    }
+    if let Some(ref state) = GLOBAL_TRAY_STATE {
+        state.ctx.request_repaint();
     }
 }
 
@@ -394,12 +421,14 @@ pub unsafe fn show_full_searchforge() {
     if let Some(ref mut state) = GLOBAL_TRAY_STATE {
         state.is_visible = true;
         let _ = state.sender.send(TrayEvent::ShowFull);
-        state.ctx.request_repaint();
     }
     if let Some(hwnd) = find_searchforge_window() {
         crate::utils::window_effects::resize_and_center_window(840.0, 520.0);
         crate::utils::window_effects::set_window_taskbar_presence(true);
         bring_window_to_foreground(hwnd);
+    }
+    if let Some(ref state) = GLOBAL_TRAY_STATE {
+        state.ctx.request_repaint();
     }
 }
 
@@ -460,7 +489,7 @@ unsafe fn show_tray_context_menu(hwnd: win32::HWND) {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn start_tray_and_hotkey_listener(_sender: Sender<TrayEvent>, _ctx: Context) {}
+fn start_tray_and_hotkey_listener(_sender: Sender<TrayEvent>, _ctx: Context, _initial_visible: bool) {}
 
 #[cfg(target_os = "windows")]
 pub mod win32 {

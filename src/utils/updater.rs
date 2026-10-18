@@ -257,8 +257,17 @@ impl UpdateManager {
         if let UpdateState::ReadyToRestart { installer_path, .. } = &self.state {
             #[cfg(target_os = "windows")]
             {
+                use std::os::windows::process::CommandExt;
                 let path_str = installer_path.to_string_lossy().to_string();
-                let _ = std::process::Command::new(&path_str).spawn();
+                let lower = path_str.to_ascii_lowercase();
+                let mut cmd = std::process::Command::new(&path_str);
+                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                if lower.contains("setup") {
+                    cmd.args(["/SILENT", "/CLOSEAPPLICATIONS"]);
+                } else {
+                    cmd.arg("--autostart");
+                }
+                let _ = cmd.spawn();
             }
             #[cfg(target_os = "macos")]
             {

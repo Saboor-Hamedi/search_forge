@@ -36,5 +36,8 @@ Name: "{autodesktop}\SearchForge"; Filename: "{app}\search_forge.exe"; Tasks: de
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
+[Registry]
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "SearchForge"; ValueData: """{app}\search_forge.exe"" --autostart"; Flags: uninsdeletevalue
+
 [Run]
-Filename: "{app}\search_forge.exe"; Description: "{cm:LaunchProgram,SearchForge}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\search_forge.exe"; Parameters: "--autostart"; Description: "{cm:LaunchProgram,SearchForge}"; Flags: nowait postinstall

@@ -49,6 +49,7 @@ impl SearchForgeApp {
         cc.egui_ctx.set_fonts(fonts);
 
         let config = crate::utils::config::AppConfig::load();
+        crate::utils::config::AppConfig::sync_system_autostart(config.autostart);
 
         // Apply sleek dark / glass theme base visuals
         Self::apply_theme_visuals(&cc.egui_ctx, config.theme);
@@ -102,13 +103,21 @@ impl SearchForgeApp {
         let ignored_patterns = default_ignored_patterns();
         start_background_scan(ignored_patterns.clone(), store.clone(), icon_cache.clone());
 
-        let tray_manager = crate::utils::tray_hotkey::TrayHotkeyManager::new(cc.egui_ctx.clone());
+        let tray_manager = crate::utils::tray_hotkey::TrayHotkeyManager::new(cc.egui_ctx.clone(), !is_autostart);
 
         let initial_lifecycle = if is_autostart {
             WindowLifecycle::Hidden
         } else {
             WindowLifecycle::SpotlightVisible
         };
+
+        if is_autostart {
+            crate::utils::window_effects::set_window_taskbar_presence(false);
+            #[cfg(target_os = "windows")]
+            if let Some(hwnd) = crate::utils::tray_hotkey::find_searchforge_window() {
+                crate::utils::tray_hotkey::hide_searchforge_window(hwnd);
+            }
+        }
 
         Self {
             search_query: String::new(),
@@ -221,6 +230,34 @@ impl SearchForgeApp {
 
 impl App for SearchForgeApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // Intercept OS close requests (e.g. Alt+F4 or taskbar close) so the app hides to tray
+        // instead of terminating the background process.
+        if ctx.input(|i| i.viewport().close_requested()) && self.lifecycle != WindowLifecycle::ShuttingDown {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.hide_to_tray(ctx);
+            return;
+        }
+
+        // Process OS tray and global Alt+K hotkey events FIRST (before first-frame init check)
+        while let Some(event) = self.tray_manager.try_recv() {
+            match event {
+                crate::utils::tray_hotkey::TrayEvent::ShowSpotlight => {
+                    self.show_spotlight(ctx);
+                }
+                crate::utils::tray_hotkey::TrayEvent::ShowFull => {
+                    self.show_full_window(ctx);
+                }
+                crate::utils::tray_hotkey::TrayEvent::Hide => {
+                    self.hide_to_tray(ctx);
+                }
+                crate::utils::tray_hotkey::TrayEvent::Quit => {
+                    self.lifecycle = WindowLifecycle::ShuttingDown;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    std::process::exit(0);
+                }
+            }
+        }
+
         // Initialize native backdrop blur on first frame
         if !self.applied_theme_init {
             self.applied_theme_init = true;
@@ -229,6 +266,7 @@ impl App for SearchForgeApp {
 
             // If initial mode is Hidden (launched on startup), ensure window stays hidden
             if self.lifecycle == WindowLifecycle::Hidden {
+                crate::utils::window_effects::set_window_taskbar_presence(false);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                 #[cfg(target_os = "windows")]
                 if let Some(hwnd) = crate::utils::tray_hotkey::find_searchforge_window() {
@@ -248,6 +286,7 @@ impl App for SearchForgeApp {
             self.suppress_k_frames -= 1;
             ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::ALT, egui::Key::K);
+                i.consume_key(egui::Modifiers::CTRL, egui::Key::K);
                 i.consume_key(egui::Modifiers::NONE, egui::Key::K);
                 i.events.retain(|e| match e {
                     egui::Event::Key { key: egui::Key::K, .. } => false,
@@ -259,26 +298,6 @@ impl App for SearchForgeApp {
 
         // Poll background updater events on each frame
         self.updater.poll_updates();
-
-        // Process OS tray and global Alt+K hotkey events
-        while let Some(event) = self.tray_manager.try_recv() {
-            match event {
-                crate::utils::tray_hotkey::TrayEvent::ShowSpotlight => {
-                    self.show_spotlight(ctx);
-                }
-                crate::utils::tray_hotkey::TrayEvent::ShowFull => {
-                    self.show_full_window(ctx);
-                }
-                crate::utils::tray_hotkey::TrayEvent::Hide => {
-                    self.hide_to_tray(ctx);
-                }
-                crate::utils::tray_hotkey::TrayEvent::Quit => {
-                    self.lifecycle = WindowLifecycle::ShuttingDown;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    std::process::exit(0);
-                }
-            }
-        }
 
         // Spotlight auto-dismiss on focus lost (exact PowerToys Run behavior)
         if self.lifecycle.is_spotlight() {
@@ -302,9 +321,12 @@ impl App for SearchForgeApp {
             }
         }
 
-        // In-app Alt + K shortcut: if pressed when already open and not suppressed, toggle closed to tray
-        let alt_k_pressed = ctx.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::K));
-        if alt_k_pressed && self.suppress_k_frames == 0 {
+        // In-app Alt + K or Ctrl + K shortcut: if pressed when already open and not suppressed, toggle closed to tray
+        let toggle_k_pressed = ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::ALT, egui::Key::K)
+                || i.consume_key(egui::Modifiers::CTRL, egui::Key::K)
+        });
+        if toggle_k_pressed && self.suppress_k_frames == 0 {
             if self.lifecycle.is_visible() {
                 self.hide_to_tray(ctx);
             }
